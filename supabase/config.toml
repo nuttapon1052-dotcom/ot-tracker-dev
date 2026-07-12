@@ -1,0 +1,20 @@
+
+[functions.send-push-test]
+enabled = true
+verify_jwt = false
+import_map = "./functions/send-push-test/deno.json"
+# Uncomment to specify a custom file path to the entrypoint.
+# Supported file extensions are: .ts, .js, .mjs, .jsx, .tsx
+entrypoint = "./functions/send-push-test/index.ts"
+# Specifies static files to be bundled with the function. Supports glob patterns.
+# For example, if you want to serve static HTML pages in your function:
+# static_files = [ "./functions/send-push-test/*.html" ]
+
+[functions.send-push-reminders]
+enabled = true
+# ต้องแนบ Authorization: Bearer <JWT ที่ valid> มาด้วย (service_role key ก็คือ
+# JWT ที่ valid) ฟังก์ชันเองก็เช็คซ้ำอีกชั้นว่าต้องเป็น service_role key เป๊ะๆ
+# เท่านั้น ไม่ใช่แค่ JWT ใดๆ (ดูรายละเอียดใน index.ts)
+verify_jwt = true
+import_map = "./functions/send-push-reminders/deno.json"
+entrypoint = "./functions/send-push-reminders/index.ts"

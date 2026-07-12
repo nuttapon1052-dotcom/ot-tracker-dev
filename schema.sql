@@ -2,7 +2,13 @@
 create table ot_settings (
   user_id uuid references auth.users(id) primary key,
   data jsonb not null default '{}',
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  -- คอลัมน์สองตัวด้านล่างนี้ใช้เฉพาะฝั่ง server (Edge Function
+  -- send-push-reminders) เท่านั้น แยกออกมาจาก data โดยตั้งใจ เพราะแอปฝั่ง
+  -- client จะ upsert ทับคอลัมน์ data ทั้งก้อนทุกครั้งที่ผู้ใช้แก้ settings
+  -- ถ้าเก็บไว้ใน data ค่าที่ server เขียนจะหายไปตอน sync รอบถัดไป
+  timezone text not null default 'Asia/Bangkok',
+  last_reminder_sent_date date
 );
 
 -- ตารางเก็บรายการบันทึกเวลา (หลายแถวต่อ 1 user)
