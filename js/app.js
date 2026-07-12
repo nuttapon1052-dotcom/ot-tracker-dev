@@ -174,6 +174,7 @@
       }
       var stillOpen = !els.calendarOverlay.classList.contains("hidden");
       if (stillOpen && calendarViewDate.getFullYear() === year) renderCalendar();
+      updateHolidayNotice();
     });
   }
 
@@ -479,6 +480,7 @@
     dateTrigger: $("dateTrigger"),
     dateTriggerText: $("dateTriggerText"),
     weekendNotice: $("weekendNotice"),
+    holidayNotice: $("holidayNotice"),
     fTimeIn: $("f-timein"),
     fTimeOut: $("f-timeout"),
     fOtRate: $("f-otrate"),
@@ -775,6 +777,23 @@
     els.weekendNotice.classList.toggle("hidden", !isWeekendDate(els.fDate.value));
   }
 
+  function updateHolidayNotice() {
+    var iso = els.fDate.value;
+    var holidayName = null;
+    if (iso) {
+      var year = fromISODate(iso).getFullYear();
+      var holidays = holidaysForYear(year);
+      holidayName = holidays ? holidays[iso] : null;
+      ensureHolidaysForYear(year);
+    }
+    if (holidayName) {
+      els.holidayNotice.textContent = "🔴 " + holidayDisplayName(holidayName) + " — วันหยุดราชการ";
+      els.holidayNotice.classList.remove("hidden");
+    } else {
+      els.holidayNotice.classList.add("hidden");
+    }
+  }
+
   function updateDateTriggerText() {
     var v = els.fDate.value;
     els.dateTriggerText.textContent = v ? dfFull.format(fromISODate(v)) : "เลือกวันที่";
@@ -783,6 +802,7 @@
 
   function updatePreview() {
     updateWeekendNotice();
+    updateHolidayNotice();
     updateDateTriggerText();
     var draft = draftEntryFromForm();
     if (!draft.timeIn || !draft.timeOut) {

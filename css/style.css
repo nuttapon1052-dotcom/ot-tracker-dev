@@ -14,6 +14,7 @@
   --series-ot-soft: #cdeee1;
 
   --status-critical:#d03b3b;
+  --status-critical-soft: #f7d6d6;
   --status-good:    #0ca30c;
   --status-warning: #fab219;
 
@@ -43,6 +44,7 @@
     --series-ot-soft: #0f3d2c;
 
     --status-critical:#e66767;
+    --status-critical-soft: #4a2323;
     --status-good:    #0ca30c;
     --status-warning: #fab219;
 
@@ -65,6 +67,7 @@
   --series-ot-soft: #0f3d2c;
 
   --status-critical:#e66767;
+  --status-critical-soft: #4a2323;
   --status-good:    #0ca30c;
   --status-warning: #fab219;
 
@@ -259,14 +262,23 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 }
 .hint--error{ color: var(--status-critical); font-weight:600; }
 
-.weekend-notice{
-  font-size: 12px; font-weight:700; color: var(--series-ot);
-  background: var(--series-ot-soft);
+.date-notices{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.date-notices:has(> :not(.hidden)){ margin: 8px 0 0; }
+
+.weekend-notice,
+.holiday-notice{
+  font-size: 12px; font-weight:700;
   border-radius: var(--radius-sm);
   padding: 6px 10px;
-  margin: 8px 0 0;
+  margin: 0;
   display: inline-block;
 }
+.weekend-notice{ color: var(--series-ot); background: var(--series-ot-soft); }
+.holiday-notice{ color: var(--status-critical); background: var(--status-critical-soft); }
 
 .preview{
   background: var(--page);
