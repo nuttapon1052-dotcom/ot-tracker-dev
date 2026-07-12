@@ -35,9 +35,14 @@
       defaultTimeIn: "",
       defaultTimeOut: "",
       lockTimeIn: false,
-      lockTimeOut: false
+      lockTimeOut: false,
+      // end-of-work reminder toggle - the actual browser permission is
+      // requested only when the user turns this on (its change handler,
+      // below), never automatically on load.
+      notifyEnabled: false
     },
-    entries: [] // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
+    entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
+    workNotes: [] // { id, title, description, startDate, endDate }
   };
 
   var CURRENCIES = {
@@ -186,6 +191,7 @@
       var state = clone(DEFAULT_STATE);
       state.settings = Object.assign({}, state.settings, parsed.settings || {});
       state.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+      state.workNotes = Array.isArray(parsed.workNotes) ? parsed.workNotes : [];
       return state;
     } catch (e) {
       console.error("โหลดข้อมูลผิดพลาด", e);
@@ -316,6 +322,7 @@
   var dfMonthYear = new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric" });
   var dfYear = new Intl.DateTimeFormat("th-TH", { year: "numeric" });
   var dfMonthShort = new Intl.DateTimeFormat("th-TH", { month: "short" });
+  var dfDateTime = new Intl.DateTimeFormat("th-TH", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   /* ============================================================
    * Calculation core
@@ -493,6 +500,24 @@
     entryList: $("entryList"),
     entryCount: $("entryCount"),
 
+    entrySubTabs: $("entrySubTabs"),
+    entrySubviewLog: $("entrySubviewLog"),
+    entrySubviewNotes: $("entrySubviewNotes"),
+    noteForm: $("noteForm"),
+    noteFormTitle: $("noteFormTitle"),
+    nTitle: $("n-title"),
+    nDescription: $("n-description"),
+    noteStartTrigger: $("noteStartTrigger"),
+    noteStartTriggerText: $("noteStartTriggerText"),
+    nStartDate: $("n-startdate"),
+    noteEndTrigger: $("noteEndTrigger"),
+    noteEndTriggerText: $("noteEndTriggerText"),
+    nEndDate: $("n-enddate"),
+    cancelEditNoteBtn: $("cancelEditNoteBtn"),
+    saveNoteBtn: $("saveNoteBtn"),
+    noteList: $("noteList"),
+    noteCount: $("noteCount"),
+
     summaryModeTabs: $("summaryModeTabs"),
     periodPrev: $("periodPrev"),
     periodNext: $("periodNext"),
@@ -540,6 +565,9 @@
     sLockTimeOut: $("s-locktimeout"),
     lockTimeInRow: $("lockTimeInRow"),
     lockTimeOutRow: $("lockTimeOutRow"),
+    sNotifyEnabled: $("s-notifyenabled"),
+    notifyRow: $("notifyRow"),
+    notifyHint: $("notifyHint"),
     currencyTrigger: $("currencyTrigger"),
     currencyTriggerFlag: $("currencyTriggerFlag"),
     currencyTriggerLabel: $("currencyTriggerLabel"),
@@ -575,6 +603,11 @@
     googleLoginBtn: $("googleLoginBtn"),
     logoutBtn: $("logoutBtn"),
     userEmailDisplay: $("userEmailDisplay"),
+    syncStatusRow: $("syncStatusRow"),
+    syncStatusIcon: $("syncStatusIcon"),
+    syncStatusText: $("syncStatusText"),
+    syncRetryBtn: $("syncRetryBtn"),
+    syncErrorBanner: $("syncErrorBanner"),
 
     toast: $("toast"),
     confirmOverlay: $("confirmDialog"),
@@ -681,6 +714,22 @@
     });
     window.scrollTo(0, 0);
     if (view === "summary") renderSummary();
+  });
+
+  /* ============================================================
+   * Entry sub-tabs (บันทึกเวลา / บันทึกเหตุการณ์) - lives inside the
+   * "entry" main tab only, no separate bottom-nav entry (see workNotes
+   * section further below for the sub-tab's own content).
+   * ========================================================== */
+  els.entrySubTabs.addEventListener("click", function (e) {
+    var btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    var subview = btn.dataset.subview;
+    els.entrySubviewLog.classList.toggle("hidden", subview !== "log");
+    els.entrySubviewNotes.classList.toggle("hidden", subview !== "notes");
+    Array.prototype.forEach.call(els.entrySubTabs.children, function (b) {
+      b.classList.toggle("is-active", b === btn);
+    });
   });
 
   /* ============================================================
@@ -794,10 +843,17 @@
     }
   }
 
+  // Shared by the entry-date trigger and the two work-note date triggers -
+  // all three are "button styled as a date input" widgets backed by a
+  // hidden <input type=hidden>, opened via the one shared calendar-box.
+  function updateDateTriggerTextGeneric(inputEl, textEl, triggerEl) {
+    var v = inputEl.value;
+    textEl.textContent = v ? dfFull.format(fromISODate(v)) : "เลือกวันที่";
+    triggerEl.classList.toggle("is-empty", !v);
+  }
+
   function updateDateTriggerText() {
-    var v = els.fDate.value;
-    els.dateTriggerText.textContent = v ? dfFull.format(fromISODate(v)) : "เลือกวันที่";
-    els.dateTrigger.classList.toggle("is-empty", !v);
+    updateDateTriggerTextGeneric(els.fDate, els.dateTriggerText, els.dateTrigger);
   }
 
   function updatePreview() {
@@ -883,6 +939,25 @@
     return String(Math.round(h * 10) / 10);
   }
 
+  // Whether any work note's [startDate, endDate] range covers this date -
+  // drives the small "has a note" dot shown in the shared calendar-box
+  // regardless of which field opened it (see calendarTarget below).
+  function hasNoteForDate(iso) {
+    return state.workNotes.some(function (n) { return iso >= n.startDate && iso <= n.endDate; });
+  }
+
+  // Which hidden date input the shared calendar-box is currently editing:
+  // "entry" (f-date), "note-start" (n-startdate) or "note-end" (n-enddate).
+  // Set by openCalendar(), read by renderCalendar()/selectCalendarDate() so
+  // the same overlay/markup can drive all three date pickers.
+  var calendarTarget = "entry";
+
+  function calendarTargetFieldValue() {
+    if (calendarTarget === "note-start") return els.nStartDate.value;
+    if (calendarTarget === "note-end") return els.nEndDate.value;
+    return els.fDate.value;
+  }
+
   function renderCalendar() {
     var year = calendarViewDate.getFullYear();
     var month = calendarViewDate.getMonth();
@@ -894,7 +969,7 @@
     var daysInMonth = new Date(year, month + 1, 0).getDate();
 
     var todayISO = toISODate(new Date());
-    var selectedISO = els.fDate.value;
+    var selectedISO = calendarTargetFieldValue();
     var holidays = holidaysForYear(year);
 
     var cells = "";
@@ -906,6 +981,7 @@
       var iso = toISODate(cellDate);
       var dow = cellDate.getDay();
       var otHours = otHoursForDate(iso);
+      var hasNote = hasNoteForDate(iso);
       var holidayName = holidays ? holidays[iso] : null;
       var holidayDisplay = holidayName ? holidayDisplayName(holidayName) : null;
       var classes = ["calendar-day"];
@@ -922,6 +998,7 @@
           ">" +
           '<span class="calendar-day__num">' + day + "</span>" +
           (otHours > 0 ? '<span class="calendar-day__ot">' + fmtHoursShort(otHours) + "</span>" : "") +
+          (hasNote ? '<span class="calendar-day__note-dot"></span>' : "") +
         "</button>";
     }
     els.calendarGrid.innerHTML = cells;
@@ -934,9 +1011,31 @@
     els.fDate.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  function openCalendar() {
-    var current = els.fDate.value ? fromISODate(els.fDate.value) : new Date();
-    calendarViewDate = new Date(current.getFullYear(), current.getMonth(), 1);
+  // Shared setter for the two work-note date fields, which have no native
+  // <input> event listeners of their own (unlike f-date) - just updates the
+  // trigger button label directly. When setting the start date and the end
+  // date is still blank or now precedes it, the end date is pulled along so
+  // a single-day note (start === end, per the work-notes spec) is the
+  // default without extra taps.
+  function setNoteDateValue(target, iso) {
+    if (target === "note-start") {
+      els.nStartDate.value = iso;
+      updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
+      if (iso && (!els.nEndDate.value || els.nEndDate.value < iso)) {
+        els.nEndDate.value = iso;
+        updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+      }
+    } else {
+      els.nEndDate.value = iso;
+      updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    }
+  }
+
+  function openCalendar(target) {
+    calendarTarget = target || "entry";
+    var current = calendarTargetFieldValue();
+    var base = current ? fromISODate(current) : new Date();
+    calendarViewDate = new Date(base.getFullYear(), base.getMonth(), 1);
     renderCalendar();
     els.calendarOverlay.classList.remove("hidden");
   }
@@ -946,11 +1045,17 @@
   }
 
   function selectCalendarDate(iso) {
-    setFDateValue(iso);
+    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+      setNoteDateValue(calendarTarget, iso);
+    } else {
+      setFDateValue(iso);
+    }
     closeCalendar();
   }
 
-  els.dateTrigger.addEventListener("click", openCalendar);
+  els.dateTrigger.addEventListener("click", function () { openCalendar("entry"); });
+  els.noteStartTrigger.addEventListener("click", function () { openCalendar("note-start"); });
+  els.noteEndTrigger.addEventListener("click", function () { openCalendar("note-end"); });
   els.calClose.addEventListener("click", closeCalendar);
 
   els.calPrev.addEventListener("click", function () {
@@ -967,7 +1072,11 @@
     selectCalendarDate(toISODate(t));
   });
   els.calClear.addEventListener("click", function () {
-    setFDateValue("");
+    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+      setNoteDateValue(calendarTarget, "");
+    } else {
+      setFDateValue("");
+    }
     closeCalendar();
   });
   els.calendarGrid.addEventListener("click", function (e) {
@@ -1053,6 +1162,135 @@
         renderEntryList();
         showToast("ลบรายการแล้ว");
         if (editingId === id) resetForm();
+      });
+    }
+  });
+
+  /* ============================================================
+   * Work notes (บันทึกเหตุการณ์ล่วงหน้า) — entirely separate from the OT
+   * entries above: own state array, own form, own list, synced to its own
+   * Supabase table (work_notes). Only touches the shared calendar-box (via
+   * calendarTarget, above) and the shared notifyEnabled toggle (see
+   * checkUpcomingNoteNotifications near the end-of-work reminder below).
+   * ========================================================== */
+  var editingNoteId = null;
+
+  function resetNoteForm() {
+    editingNoteId = null;
+    els.noteForm.reset();
+    els.nStartDate.value = "";
+    els.nEndDate.value = "";
+    updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
+    updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    els.noteFormTitle.textContent = "บันทึกเหตุการณ์ล่วงหน้า";
+    els.saveNoteBtn.textContent = "บันทึก";
+    els.cancelEditNoteBtn.classList.add("hidden");
+  }
+
+  function fillNoteFormFromNote(note) {
+    editingNoteId = note.id;
+    els.nTitle.value = note.title;
+    els.nDescription.value = note.description || "";
+    els.nStartDate.value = note.startDate;
+    els.nEndDate.value = note.endDate;
+    updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
+    updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    els.noteFormTitle.textContent = "แก้ไขบันทึกเหตุการณ์";
+    els.saveNoteBtn.textContent = "บันทึกการแก้ไข";
+    els.cancelEditNoteBtn.classList.remove("hidden");
+    els.noteForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  els.noteForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var title = els.nTitle.value.trim();
+    var startDate = els.nStartDate.value;
+    // Single-day note when no end date was picked: start === end, per spec.
+    var endDate = els.nEndDate.value || startDate;
+    if (!title || !startDate) {
+      showToast("กรุณากรอกหัวข้อและวันที่เริ่ม");
+      return;
+    }
+    if (endDate < startDate) {
+      showToast("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม");
+      return;
+    }
+    var draft = {
+      title: title,
+      description: els.nDescription.value.trim(),
+      startDate: startDate,
+      endDate: endDate
+    };
+    if (editingNoteId) {
+      var idx = state.workNotes.findIndex(function (x) { return x.id === editingNoteId; });
+      if (idx !== -1) state.workNotes[idx] = Object.assign({ id: editingNoteId }, draft);
+      showToast("แก้ไขบันทึกแล้ว ✓");
+    } else {
+      draft.id = uid();
+      state.workNotes.push(draft);
+      showToast("บันทึกแล้ว ✓");
+    }
+    saveState();
+    resetNoteForm();
+    renderNoteList();
+  });
+
+  els.cancelEditNoteBtn.addEventListener("click", resetNoteForm);
+
+  function noteDateRangeLabel(note) {
+    return note.startDate === note.endDate
+      ? dfFull.format(fromISODate(note.startDate))
+      : dfShort.format(fromISODate(note.startDate)) + " – " + dfFull.format(fromISODate(note.endDate));
+  }
+
+  function renderNoteList() {
+    var sorted = state.workNotes.slice().sort(function (a, b) {
+      return a.startDate < b.startDate ? -1 : (a.startDate > b.startDate ? 1 : 0);
+    });
+
+    els.noteCount.textContent = sorted.length ? sorted.length + " รายการ" : "";
+
+    if (!sorted.length) {
+      els.noteList.innerHTML = '<div class="empty-state">ยังไม่มีบันทึกเหตุการณ์ เพิ่มรายการแรกได้เลย ✨</div>';
+      return;
+    }
+
+    els.noteList.innerHTML = sorted.map(function (note) {
+      var descHtml = note.description ? '<div class="entry-item__note">📝 ' + escapeHtml(note.description) + "</div>" : "";
+      return (
+        '<div class="entry-item" data-id="' + note.id + '">' +
+          '<div class="entry-item__main">' +
+            '<div class="entry-item__date">' + escapeHtml(note.title) + "</div>" +
+            '<div class="entry-item__time">' + noteDateRangeLabel(note) + "</div>" +
+            descHtml +
+          "</div>" +
+          '<div class="entry-item__actions">' +
+            '<button class="icon-btn" data-action="edit" aria-label="แก้ไข">✏️</button>' +
+            '<button class="icon-btn" data-action="delete" aria-label="ลบ">🗑️</button>' +
+          "</div>" +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  els.noteList.addEventListener("click", function (e) {
+    var btn = e.target.closest(".icon-btn");
+    if (!btn) return;
+    var item = e.target.closest(".entry-item");
+    var id = item.dataset.id;
+    var note = state.workNotes.find(function (x) { return x.id === id; });
+    if (!note) return;
+
+    if (btn.dataset.action === "edit") {
+      fillNoteFormFromNote(note);
+    } else if (btn.dataset.action === "delete") {
+      showConfirm('ลบบันทึก "' + note.title + '" ใช่หรือไม่?').then(function (ok) {
+        if (!ok) return;
+        state.workNotes = state.workNotes.filter(function (x) { return x.id !== id; });
+        saveState();
+        renderNoteList();
+        showToast("ลบรายการแล้ว");
+        if (editingNoteId === id) resetNoteForm();
       });
     }
   });
@@ -1527,6 +1765,7 @@
     els.sLockTimeIn.checked = !!s.lockTimeIn;
     els.sLockTimeOut.checked = !!s.lockTimeOut;
     updateLockToggleAvailability();
+    updateNotifyToggleAvailability();
     updateCurrencyTrigger();
     els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
     els.monthlySalaryLabel.textContent = "เงินเดือน (" + cur.symbol + " " + cur.label + ")";
@@ -1645,7 +1884,9 @@
       els.sLockTimeOut.checked = false;
     }
     updateLockToggleAvailability();
+    updateNotifyToggleAvailability();
     persistSettings();
+    checkEndOfWorkNotification();
   });
 
   els.sLockTimeIn.addEventListener("change", function () {
@@ -1657,6 +1898,168 @@
     state.settings.lockTimeOut = els.sLockTimeOut.checked;
     persistSettings();
   });
+
+  /* ------------ End-of-work reminder (Web Notification API) ------------
+   * Foreground-only by design: a plain setInterval poll while this tab is
+   * open, no Service Worker / Push API involved. Permission is requested
+   * only from the toggle's own change handler below - never automatically
+   * on load - so the browser prompt only ever appears as a direct result
+   * of the user opting in.
+   */
+  var NOTIFY_LAST_DATE_KEY = "ot-tracker-last-notify-date-v1";
+  var NOTIFY_CHECK_INTERVAL_MS = 30000;
+
+  // Per-device "already notified today" marker - deliberately kept out of
+  // state.settings (and so out of the Supabase sync payload): it's
+  // throwaway scheduling state, not a preference worth syncing across
+  // devices.
+  function getLastNotifiedDate() {
+    try { return localStorage.getItem(NOTIFY_LAST_DATE_KEY); } catch (e) { return null; }
+  }
+  function setLastNotifiedDate(iso) {
+    try { localStorage.setItem(NOTIFY_LAST_DATE_KEY, iso); } catch (e) {}
+  }
+
+  function notificationSupport() {
+    if (typeof Notification === "undefined") return "unsupported";
+    return Notification.permission; // "granted" | "denied" | "default"
+  }
+
+  // Keeps the toggle's enabled/disabled state and hint text in sync with
+  // both browser support/permission and whether there's a reference time
+  // to notify against yet. If notifications were on but permission gets
+  // revoked (or the reference time gets cleared) out from under it, force
+  // the setting back off so the UI never claims to be notifying when it
+  // can't - this is the only case that persists a change here.
+  function updateNotifyToggleAvailability() {
+    var support = notificationSupport();
+    var hasTimeOut = !!state.settings.defaultTimeOut;
+    var disabled = support === "unsupported" || support === "denied" || !hasTimeOut;
+
+    if (disabled && state.settings.notifyEnabled) {
+      state.settings.notifyEnabled = false;
+      persistSettings();
+    }
+
+    els.sNotifyEnabled.disabled = disabled;
+    els.notifyRow.classList.toggle("is-disabled", disabled);
+    els.sNotifyEnabled.checked = !disabled && !!state.settings.notifyEnabled;
+
+    if (support === "unsupported") {
+      els.notifyHint.textContent = "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน";
+    } else if (support === "denied") {
+      els.notifyHint.textContent = "การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน";
+    } else if (!hasTimeOut) {
+      els.notifyHint.textContent = "กรอก \"เวลาเลิกงานปกติ\" ด้านบนก่อน จึงจะเปิดใช้ได้ — เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น";
+    } else {
+      els.notifyHint.textContent = "เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น";
+    }
+  }
+
+  // Fires the reminder at most once per calendar day, and never at all if
+  // that day's entry is already saved (checked at call time, so saving
+  // right up to the last second before the target time still cancels it).
+  function checkEndOfWorkNotification() {
+    if (!state.settings.notifyEnabled) return;
+    if (notificationSupport() !== "granted") return;
+    var timeOut = state.settings.defaultTimeOut;
+    if (!timeOut) return;
+
+    var now = new Date();
+    var todayISO = toISODate(now);
+    if (getLastNotifiedDate() === todayISO) return;
+
+    var hasEntryToday = state.entries.some(function (e) { return e.date === todayISO; });
+    if (hasEntryToday) {
+      setLastNotifiedDate(todayISO);
+      return;
+    }
+
+    var nowHM = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
+    if (nowHM < timeOut) return;
+
+    try {
+      new Notification("OT Tracker", { body: "⏰ ถึงเวลาเลิกงานแล้ว อย่าลืมบันทึกเวลาทำงานวันนี้" });
+    } catch (e) {
+      console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
+    }
+    setLastNotifiedDate(todayISO);
+  }
+
+  els.sNotifyEnabled.addEventListener("change", function () {
+    if (!els.sNotifyEnabled.checked) {
+      state.settings.notifyEnabled = false;
+      persistSettings();
+      updateNotifyToggleAvailability();
+      return;
+    }
+    if (typeof Notification === "undefined") {
+      els.sNotifyEnabled.checked = false;
+      updateNotifyToggleAvailability();
+      return;
+    }
+    // Only ever prompted here, as a direct result of the user flipping
+    // this toggle on - if permission was already granted/denied in a
+    // previous session, the browser resolves this immediately with no
+    // prompt.
+    Notification.requestPermission().then(function (permission) {
+      state.settings.notifyEnabled = (permission === "granted");
+      persistSettings();
+      updateNotifyToggleAvailability();
+      checkEndOfWorkNotification();
+      checkUpcomingNoteNotifications();
+    });
+  });
+
+  setInterval(checkEndOfWorkNotification, NOTIFY_CHECK_INTERVAL_MS);
+
+  /* ------------ Upcoming work-note reminder (Web Notification API) ------------
+   * Rides the same notifyEnabled toggle/permission as the end-of-work
+   * reminder above (spec: no separate toggle) but checks only once per app
+   * open, not on the 30s poll - it's date-based (does a note start
+   * tomorrow?), not time-of-day-based, so nothing changes between polls
+   * within a single session.
+   */
+  var NOTE_NOTIFY_KEY = "ot-tracker-notified-notes-v1";
+
+  // Per-device "which note ids already got a notification today" marker -
+  // same reasoning as NOTIFY_LAST_DATE_KEY above: throwaway scheduling
+  // state, deliberately kept out of state.settings and out of the Supabase
+  // sync payload.
+  function getNotifiedNoteState() {
+    try {
+      var raw = localStorage.getItem(NOTE_NOTIFY_KEY);
+      var parsed = raw ? JSON.parse(raw) : null;
+      return (parsed && parsed.date && Array.isArray(parsed.ids)) ? parsed : { date: "", ids: [] };
+    } catch (e) {
+      return { date: "", ids: [] };
+    }
+  }
+  function setNotifiedNoteState(s) {
+    try { localStorage.setItem(NOTE_NOTIFY_KEY, JSON.stringify(s)); } catch (e) {}
+  }
+
+  function checkUpcomingNoteNotifications() {
+    if (!state.settings.notifyEnabled) return;
+    if (notificationSupport() !== "granted") return;
+
+    var todayISO = toISODate(new Date());
+    var tomorrowISO = toISODate(addDays(new Date(), 1));
+    var notified = getNotifiedNoteState();
+    if (notified.date !== todayISO) notified = { date: todayISO, ids: [] };
+
+    state.workNotes.forEach(function (note) {
+      if (note.startDate !== tomorrowISO) return;
+      if (notified.ids.indexOf(note.id) !== -1) return;
+      try {
+        new Notification("OT Tracker", { body: "🔔 พรุ่งนี้: " + note.title });
+      } catch (e) {
+        console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
+      }
+      notified.ids.push(note.id);
+    });
+    setNotifiedNoteState(notified);
+  }
 
   [
     [els.sHasLunchBreak, "hasLunchBreak"],
@@ -1755,11 +2158,14 @@
           if (!ok) { els.importInput.value = ""; return; }
           state.settings = Object.assign(clone(DEFAULT_STATE.settings), parsed.settings || {});
           state.entries = parsed.entries;
+          state.workNotes = Array.isArray(parsed.workNotes) ? parsed.workNotes : [];
           saveState();
           loadSettingsToForm();
           updateHeaderTitle();
           renderEntryList();
           renderSummary();
+          resetNoteForm();
+          renderNoteList();
           showToast("นำเข้าข้อมูลสำเร็จ ✓");
           els.importInput.value = "";
         });
@@ -1781,6 +2187,8 @@
       resetForm();
       renderEntryList();
       renderSummary();
+      resetNoteForm();
+      renderNoteList();
       showToast("ล้างข้อมูลแล้ว");
     });
   });
@@ -1854,6 +2262,59 @@
     els.userEmailDisplay.textContent = signedIn ? session.user.email : "";
   }
 
+  /* ------------ Cloud sync status (icon + banner + retry) ------------
+   * Purely a UI layer on top of pushStateToCloud() below - never affects
+   * whether/when data gets saved locally (saveState() always writes to
+   * localStorage first, regardless of sync outcome).
+   */
+  var SYNC_LAST_KEY = "ot-tracker-last-sync-v1";
+  var syncStatus = "idle"; // idle | syncing | success | error
+  // Only toast once per failure streak so a sustained outage (which can
+  // trigger many pushStateToCloud() calls, one per edit) doesn't spam
+  // repeated toasts - reset back to false as soon as a push succeeds.
+  var syncErrorNotified = false;
+
+  function getLastSyncISO() {
+    try { return localStorage.getItem(SYNC_LAST_KEY); } catch (e) { return null; }
+  }
+
+  function setLastSyncISO(iso) {
+    try { localStorage.setItem(SYNC_LAST_KEY, iso); } catch (e) {}
+  }
+
+  function formatLastSync() {
+    var iso = getLastSyncISO();
+    return iso ? "ซิงก์ล่าสุดเมื่อ " + dfDateTime.format(new Date(iso)) : "ยังไม่เคยซิงก์";
+  }
+
+  function renderSyncStatus() {
+    if (!currentUserId) {
+      els.syncStatusRow.classList.add("hidden");
+      els.syncErrorBanner.classList.add("hidden");
+      return;
+    }
+    els.syncStatusRow.classList.remove("hidden");
+    els.syncStatusRow.classList.remove("sync-status--syncing", "sync-status--error");
+    if (syncStatus === "syncing") {
+      els.syncStatusRow.classList.add("sync-status--syncing");
+      els.syncStatusIcon.textContent = "🔄";
+      els.syncStatusText.textContent = "กำลังซิงก์...";
+      els.syncRetryBtn.classList.add("hidden");
+      els.syncErrorBanner.classList.add("hidden");
+    } else if (syncStatus === "error") {
+      els.syncStatusRow.classList.add("sync-status--error");
+      els.syncStatusIcon.textContent = "⚠️";
+      els.syncStatusText.textContent = "ซิงก์ไม่สำเร็จ · " + formatLastSync();
+      els.syncRetryBtn.classList.remove("hidden");
+      els.syncErrorBanner.classList.remove("hidden");
+    } else {
+      els.syncStatusIcon.textContent = "☁️✓";
+      els.syncStatusText.textContent = formatLastSync();
+      els.syncRetryBtn.classList.add("hidden");
+      els.syncErrorBanner.classList.add("hidden");
+    }
+  }
+
   function entryToRow(entry, userId) {
     return {
       id: entry.id,
@@ -1877,6 +2338,27 @@
     };
   }
 
+  function noteToRow(note, userId) {
+    return {
+      id: note.id,
+      user_id: userId,
+      title: note.title,
+      description: note.description || "",
+      start_date: note.startDate,
+      end_date: note.endDate
+    };
+  }
+
+  function rowToNote(row) {
+    return {
+      id: row.id,
+      title: row.title,
+      description: row.description || "",
+      startDate: row.start_date,
+      endDate: row.end_date
+    };
+  }
+
   // Mirrors the full local state up to Supabase: upserts the single
   // settings row, then replaces all of this user's ot_entries rows
   // wholesale (delete + reinsert) rather than diffing them - simple and
@@ -1886,6 +2368,8 @@
   function pushStateToCloud() {
     if (!supabaseClient || !currentUserId) return;
     var userId = currentUserId;
+    syncStatus = "syncing";
+    renderSyncStatus();
     supabaseClient
       .from("ot_settings")
       .upsert({ user_id: userId, data: state.settings, updated_at: new Date().toISOString() })
@@ -1900,9 +2384,28 @@
       })
       .then(function (res) {
         if (res && res.error) throw res.error;
+        return supabaseClient.from("work_notes").delete().eq("user_id", userId);
+      })
+      .then(function (res) {
+        if (res.error) throw res.error;
+        if (!state.workNotes.length) return null;
+        return supabaseClient.from("work_notes").insert(state.workNotes.map(function (n) { return noteToRow(n, userId); }));
+      })
+      .then(function (res) {
+        if (res && res.error) throw res.error;
+        setLastSyncISO(new Date().toISOString());
+        syncStatus = "success";
+        syncErrorNotified = false;
+        renderSyncStatus();
       })
       .catch(function (err) {
         console.error("ซิงก์ข้อมูลขึ้น cloud ไม่สำเร็จ", err);
+        syncStatus = "error";
+        renderSyncStatus();
+        if (!syncErrorNotified) {
+          syncErrorNotified = true;
+          showToast("⚠️ ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)");
+        }
       });
   }
 
@@ -1913,21 +2416,31 @@
   function pullStateFromCloud(userId) {
     return Promise.all([
       supabaseClient.from("ot_settings").select("data").eq("user_id", userId).maybeSingle(),
-      supabaseClient.from("ot_entries").select("*").eq("user_id", userId)
+      supabaseClient.from("ot_entries").select("*").eq("user_id", userId),
+      supabaseClient.from("work_notes").select("*").eq("user_id", userId)
     ]).then(function (results) {
-      var settingsRes = results[0], entriesRes = results[1];
+      var settingsRes = results[0], entriesRes = results[1], notesRes = results[2];
       if (settingsRes.error) throw settingsRes.error;
       if (entriesRes.error) throw entriesRes.error;
+      if (notesRes.error) throw notesRes.error;
       if (settingsRes.data) {
         state.settings = Object.assign(clone(DEFAULT_STATE.settings), settingsRes.data.data || {});
       }
       state.entries = (entriesRes.data || []).map(rowToEntry);
+      state.workNotes = (notesRes.data || []).map(rowToNote);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       loadSettingsToForm();
       updateHeaderTitle();
       resetForm();
       renderEntryList();
       renderSummary();
+      resetNoteForm();
+      renderNoteList();
+      checkUpcomingNoteNotifications();
+      setLastSyncISO(new Date().toISOString());
+      syncStatus = "success";
+      syncErrorNotified = false;
+      renderSyncStatus();
     });
   }
 
@@ -1953,7 +2466,12 @@
       });
     }).catch(function (err) {
       console.error("ซิงก์ข้อมูลเริ่มต้นไม่สำเร็จ", err);
-      showToast("ซิงก์ข้อมูลกับ cloud ไม่สำเร็จ");
+      syncStatus = "error";
+      renderSyncStatus();
+      if (!syncErrorNotified) {
+        syncErrorNotified = true;
+        showToast("⚠️ ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)");
+      }
     });
   }
 
@@ -1962,9 +2480,16 @@
     var userId = session ? session.user.id : null;
     if (userId && userId !== currentUserId) {
       currentUserId = userId;
+      syncStatus = "syncing";
+      syncErrorNotified = false;
+      renderSyncStatus();
       initialSyncOnLogin(userId);
     } else if (!userId) {
       currentUserId = null;
+      syncStatus = "idle";
+      renderSyncStatus();
+    } else {
+      renderSyncStatus();
     }
   }
 
@@ -1978,6 +2503,17 @@
 
     els.logoutBtn.addEventListener("click", function () {
       supabaseClient.auth.signOut();
+    });
+
+    els.syncRetryBtn.addEventListener("click", function () {
+      pushStateToCloud();
+    });
+
+    // Auto-retry as soon as connectivity comes back, but only if there's
+    // actually a failed sync to retry - a healthy connection firing this
+    // event (e.g. switching wifi networks) shouldn't trigger extra pushes.
+    window.addEventListener("online", function () {
+      if (currentUserId && syncStatus === "error") pushStateToCloud();
     });
 
     supabaseClient.auth.getSession().then(function (result) {
@@ -1999,6 +2535,10 @@
   updateHeaderTitle();
   resetForm();
   renderEntryList();
+  resetNoteForm();
+  renderNoteList();
   loadSettingsToForm();
   renderSummary();
+  checkEndOfWorkNotification();
+  checkUpcomingNoteNotifications();
 })();

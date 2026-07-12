@@ -261,6 +261,7 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
   line-height: 1.5;
 }
 .hint--error{ color: var(--status-critical); font-weight:600; }
+.form-intro{ margin-bottom: 14px; }
 
 .date-notices{
   display: flex;
@@ -340,6 +341,25 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 .user-bar__email{
   font-size: 14px; color: var(--text-secondary);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+}
+
+.sync-status{
+  display:flex; align-items:center; gap:8px;
+  margin-top: 12px;
+  font-size: 13px; color: var(--text-secondary);
+}
+.sync-status__icon{ font-size:15px; line-height:1; }
+.sync-status--syncing .sync-status__icon{ display:inline-block; animation: sync-spin 1s linear infinite; }
+.sync-status--error .sync-status__text{ color: var(--status-critical); font-weight:600; }
+.sync-status__text{ flex:1; min-width:0; }
+@keyframes sync-spin{ from{ transform:rotate(0deg); } to{ transform:rotate(360deg); } }
+
+.sync-error-banner{
+  font-size: 12px; font-weight:700; color: var(--status-critical);
+  background: var(--status-critical-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  margin: 8px 0 0;
 }
 
 /* ============ Entry list ============ */
@@ -587,6 +607,14 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 
 .app-version{ text-align:center; font-size:11px; color: var(--text-muted); margin: 8px 0 0; }
 
+.about-card .hint{ margin: 0 0 12px; }
+.about-fb-link{
+  display:inline-flex; align-items:center; gap:8px;
+  text-decoration:none;
+}
+.about-fb-link__icon{ flex-shrink:0; }
+.about-card .app-version{ margin-top: 14px; }
+
 /* ============ Tab bar ============ */
 .tabbar{
   position: fixed; left:0; right:0; bottom:0; z-index: 20;
@@ -682,6 +710,11 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 }
 .calendar-day.is-selected .calendar-day__num{
   background: var(--series-normal); color:#fff; box-shadow:none;
+}
+.calendar-day__note-dot{
+  width:5px; height:5px; border-radius:50%;
+  background: var(--series-normal);
+  margin-top: 1px;
 }
 
 .calendar-actions{

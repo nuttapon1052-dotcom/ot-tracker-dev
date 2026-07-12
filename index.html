@@ -48,6 +48,12 @@
 
   <!-- ============ VIEW: ENTRY ============ -->
   <section id="view-entry" class="view">
+    <div class="segmented" id="entrySubTabs">
+      <button type="button" class="segmented__btn is-active" data-subview="log">บันทึกเวลา</button>
+      <button type="button" class="segmented__btn" data-subview="notes">บันทึกเหตุการณ์</button>
+    </div>
+
+    <div id="entrySubviewLog">
     <form id="entryForm" class="card form-card">
       <h2 class="card__title" id="entryFormTitle">บันทึกเวลาทำงาน</h2>
 
@@ -109,6 +115,64 @@
       <span id="entryCount" class="muted"></span>
     </div>
     <div id="entryList" class="entry-list"></div>
+
+    <div class="card form-card about-card">
+      <h2 class="card__title">เกี่ยวกับแอป</h2>
+      <p class="hint">ผู้พัฒนา: นัฐพล ธิวังการ</p>
+      <a href="https://www.facebook.com/nattapon.thiwangkan/" target="_blank" rel="noopener noreferrer" class="btn btn--secondary about-fb-link">
+        <svg class="about-fb-link__icon" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false"><path fill="currentColor" d="M22 12.06C22 6.505 17.523 2 12 2S2 6.505 2 12.06c0 5.02 3.657 9.184 8.438 9.94v-7.03H7.898v-2.91h2.54V9.845c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.459h-1.26c-1.243 0-1.63.771-1.63 1.562v1.877h2.773l-.443 2.91h-2.33V22c4.78-.756 8.438-4.92 8.438-9.94Z"/></svg>
+        <span>Facebook</span>
+      </a>
+      <p class="app-version">© 2026 สงวนลิขสิทธิ์ทั้งหมด</p>
+    </div>
+    </div>
+
+    <div id="entrySubviewNotes" class="hidden">
+      <form id="noteForm" class="card form-card">
+        <h2 class="card__title" id="noteFormTitle">บันทึกเหตุการณ์ล่วงหน้า</h2>
+        <p class="hint form-intro">จดบันทึกนัดหมายหรืองานที่ต้องทำล่วงหน้า เช่น ทำงานนอกสถานที่ ประชุม หรือวันลา ระบบจะแจ้งเตือนอัตโนมัติก่อนถึงวันที่ 1 วัน (ต้องเปิดการแจ้งเตือนในหน้าตั้งค่าก่อน)</p>
+
+        <div class="field">
+          <label for="n-title">หัวข้อ</label>
+          <input type="text" id="n-title" required maxlength="100" placeholder="เช่น ประชุมทีม, วันลา" />
+        </div>
+
+        <div class="field">
+          <label for="n-description">รายละเอียด (ไม่บังคับ)</label>
+          <input type="text" id="n-description" maxlength="200" placeholder="รายละเอียดเพิ่มเติม" />
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="noteStartTrigger">วันที่เริ่ม</label>
+            <button type="button" id="noteStartTrigger" class="date-trigger" aria-haspopup="dialog">
+              <span id="noteStartTriggerText">เลือกวันที่</span>
+              <span class="date-trigger__icon">📅</span>
+            </button>
+            <input type="hidden" id="n-startdate" />
+          </div>
+          <div class="field">
+            <label for="noteEndTrigger">วันที่สิ้นสุด</label>
+            <button type="button" id="noteEndTrigger" class="date-trigger" aria-haspopup="dialog">
+              <span id="noteEndTriggerText">เลือกวันที่</span>
+              <span class="date-trigger__icon">📅</span>
+            </button>
+            <input type="hidden" id="n-enddate" />
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" id="cancelEditNoteBtn" class="btn btn--ghost hidden">ยกเลิกแก้ไข</button>
+          <button type="submit" class="btn btn--primary" id="saveNoteBtn">บันทึก</button>
+        </div>
+      </form>
+
+      <div class="list-header">
+        <h3>รายการบันทึกเหตุการณ์</h3>
+        <span id="noteCount" class="muted"></span>
+      </div>
+      <div id="noteList" class="entry-list"></div>
+    </div>
   </section>
 
   <!-- ============ VIEW: SUMMARY ============ -->
@@ -245,9 +309,17 @@
         </button>
       </div>
 
-      <div id="authSignedIn" class="user-bar hidden">
-        <span id="userEmailDisplay" class="user-bar__email"></span>
-        <button type="button" id="logoutBtn" class="btn btn--ghost btn--small">ออกจากระบบ</button>
+      <div id="authSignedIn" class="hidden">
+        <div class="user-bar">
+          <span id="userEmailDisplay" class="user-bar__email"></span>
+          <button type="button" id="logoutBtn" class="btn btn--ghost btn--small">ออกจากระบบ</button>
+        </div>
+        <div id="syncStatusRow" class="sync-status hidden">
+          <span id="syncStatusIcon" class="sync-status__icon">☁️</span>
+          <span id="syncStatusText" class="sync-status__text"></span>
+          <button type="button" id="syncRetryBtn" class="btn btn--ghost btn--small hidden">ลองซิงก์ใหม่</button>
+        </div>
+        <p id="syncErrorBanner" class="sync-error-banner hidden">⚠️ ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)</p>
       </div>
     </div>
 
@@ -325,6 +397,18 @@
           </span>
         </label>
         <p class="hint">กรอกเวลาเลิกงานปกติด้านบนก่อน จึงจะเปิดใช้ได้ · วันเสาร์-อาทิตย์จะเว้นว่างเสมอไม่ว่าจะล็อคไว้หรือไม่</p>
+      </div>
+
+      <h2 class="card__title card__title--spaced">การแจ้งเตือน</h2>
+      <div class="field">
+        <label class="switch-row" id="notifyRow" for="s-notifyenabled">
+          <span>เปิดการแจ้งเตือนเมื่อถึงเวลาเลิกงาน</span>
+          <span class="switch">
+            <input type="checkbox" id="s-notifyenabled" disabled />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <p class="hint" id="notifyHint">กรอก "เวลาเลิกงานปกติ" ด้านบนก่อน จึงจะเปิดใช้ได้ — เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น</p>
       </div>
 
       <h2 class="card__title card__title--spaced">ตารางเวลาทำงานมาตรฐาน</h2>
