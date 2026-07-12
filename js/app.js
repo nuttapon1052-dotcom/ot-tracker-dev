@@ -569,6 +569,9 @@
     sNotifyEnabled: $("s-notifyenabled"),
     notifyRow: $("notifyRow"),
     notifyHint: $("notifyHint"),
+    sPushEnabled: $("s-pushenabled"),
+    pushRow: $("pushRow"),
+    pushHint: $("pushHint"),
     currencyTrigger: $("currencyTrigger"),
     currencyTriggerFlag: $("currencyTriggerFlag"),
     currencyTriggerLabel: $("currencyTriggerLabel"),
@@ -2494,6 +2497,7 @@
     } else {
       renderSyncStatus();
     }
+    refreshPushToggleState();
   }
 
   if (supabaseClient) {
@@ -2532,6 +2536,152 @@
   }
 
   /* ============================================================
+   * Web Push Notification (infrastructure only - stage 1)
+   * Separate from the tab-only reminder above (notifyEnabled/
+   * Notification API): this subscribes the device to browser Push via
+   * the Service Worker's pushManager, so notifications can eventually
+   * be delivered even when the app/tab is closed. No push is actually
+   * sent yet - this stage only wires up subscribe/unsubscribe and
+   * persists the subscription to Supabase (push_subscriptions) so a
+   * later server-side stage has something to send to. Requires being
+   * signed in, since a subscription is meaningless without a user_id
+   * to send it to.
+   * ========================================================== */
+  // Paste the VAPID public key here before enabling real push delivery.
+  var VAPID_PUBLIC_KEY = "BMoirSRJxpo5bN9SR1YrTDm4BqqhwCvpIqWq31WCufA-EtgIQ5rXN46Yg9LTXa_Ep0hJWSCpACp_KbI14ahA4Zc";
+
+  function pushSupported() {
+    return "serviceWorker" in navigator && "PushManager" in window && typeof Notification !== "undefined";
+  }
+
+  // Web Push application server keys arrive as URL-safe base64; the Push
+  // API wants raw bytes.
+  function urlBase64ToUint8Array(base64String) {
+    var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    var rawData = window.atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  // Keeps the toggle's checked/enabled state and hint text in sync with
+  // reality (support, sign-in state, and the actual subscription) -
+  // mirrors updateNotifyToggleAvailability's role for the tab-only
+  // reminder above.
+  function updatePushToggleAvailability(subscribed) {
+    var supported = pushSupported();
+    var disabled = !supported || !currentUserId;
+    els.sPushEnabled.disabled = disabled;
+    els.pushRow.classList.toggle("is-disabled", disabled);
+    els.sPushEnabled.checked = !disabled && !!subscribed;
+    if (!supported) {
+      els.pushHint.textContent = "อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)";
+    } else if (!currentUserId) {
+      els.pushHint.textContent = "ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+    } else if (subscribed) {
+      els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+    } else {
+      els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+    }
+  }
+
+  // Re-derives the toggle state from the Service Worker's actual
+  // subscription (source of truth) rather than trusting any locally
+  // cached flag - a subscription can be revoked outside the app (e.g.
+  // browser settings) so this is called after every relevant change.
+  function refreshPushToggleState() {
+    if (!pushSupported()) {
+      updatePushToggleAvailability(false);
+      return;
+    }
+    navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription();
+    }).then(function (sub) {
+      updatePushToggleAvailability(!!sub);
+    }).catch(function () {
+      updatePushToggleAvailability(false);
+    });
+  }
+
+  function savePushSubscription(sub) {
+    if (!supabaseClient || !currentUserId) return Promise.resolve();
+    var json = sub.toJSON();
+    return supabaseClient.from("push_subscriptions").upsert({
+      user_id: currentUserId,
+      endpoint: json.endpoint,
+      p256dh: json.keys.p256dh,
+      auth: json.keys.auth
+    }, { onConflict: "user_id,endpoint" });
+  }
+
+  function deletePushSubscription(endpoint) {
+    if (!supabaseClient || !currentUserId) return Promise.resolve();
+    return supabaseClient.from("push_subscriptions").delete().eq("user_id", currentUserId).eq("endpoint", endpoint);
+  }
+
+  function subscribeToPush() {
+    return navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+      });
+    }).then(function (sub) {
+      return savePushSubscription(sub);
+    });
+  }
+
+  function unsubscribeFromPush() {
+    return navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription();
+    }).then(function (sub) {
+      if (!sub) return null;
+      var endpoint = sub.endpoint;
+      return sub.unsubscribe().then(function () {
+        return deletePushSubscription(endpoint);
+      });
+    });
+  }
+
+  els.sPushEnabled.addEventListener("change", function () {
+    if (!els.sPushEnabled.checked) {
+      unsubscribeFromPush().then(function () {
+        showToast("ปิดการแจ้งเตือนแบบ Push แล้ว");
+      }).catch(function (err) {
+        console.error("ยกเลิกการสมัครรับ Push ไม่สำเร็จ", err);
+      }).finally(refreshPushToggleState);
+      return;
+    }
+
+    if (!pushSupported()) {
+      els.sPushEnabled.checked = false;
+      showToast("อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)");
+      return;
+    }
+    if (!currentUserId) {
+      els.sPushEnabled.checked = false;
+      showToast("กรุณาเข้าสู่ระบบก่อนเปิดการแจ้งเตือนแบบ Push");
+      return;
+    }
+
+    Notification.requestPermission().then(function (permission) {
+      if (permission !== "granted") {
+        showToast("การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน");
+        refreshPushToggleState();
+        return;
+      }
+      subscribeToPush().then(function () {
+        showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓");
+        refreshPushToggleState();
+      }).catch(function (err) {
+        console.error("สมัครรับ Push ไม่สำเร็จ", err);
+        showToast("เปิดการแจ้งเตือนแบบ Push ไม่สำเร็จ");
+        refreshPushToggleState();
+      });
+    });
+  });
+
+  /* ============================================================
    * Init
    * ========================================================== */
   initMoneyInputs(document);
@@ -2544,4 +2694,5 @@
   renderSummary();
   checkEndOfWorkNotification();
   checkUpcomingNoteNotifications();
+  refreshPushToggleState();
 })();

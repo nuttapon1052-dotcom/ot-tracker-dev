@@ -61,3 +61,39 @@ self.addEventListener("fetch", function (event) {
     })
   );
 });
+
+// Web Push - stage 1 (infrastructure only, no server sends a push yet).
+// Payload shape isn't final, so fall back to sane defaults instead of
+// throwing once a real push does arrive.
+self.addEventListener("push", function (event) {
+  var data = {};
+  if (event.data) {
+    try { data = event.data.json(); } catch (e) { data = { body: event.data.text() }; }
+  }
+
+  var title = data.title || "OT Tracker";
+  var options = {
+    body: data.body || "",
+    icon: "./icons/icon-192.png",
+    badge: "./icons/icon-192.png",
+    data: data.url ? { url: data.url } : {}
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", function (event) {
+  event.notification.close();
+
+  var url = (event.notification.data && event.notification.data.url) || "./";
+
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(function (clientList) {
+      for (var i = 0; i < clientList.length; i++) {
+        var client = clientList[i];
+        if ("focus" in client) return client.focus();
+      }
+      if (clients.openWindow) return clients.openWindow(url);
+    })
+  );
+});
