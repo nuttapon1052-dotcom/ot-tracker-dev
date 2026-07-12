@@ -531,6 +531,7 @@
     exportRangeError: $("exportRangeError"),
     exportCancelBtn: $("exportCancelBtn"),
     exportConfirmBtn: $("exportConfirmBtn"),
+    exportHint: $("exportHint"),
     summaryRecorderLine: $("summaryRecorderLine"),
     statNormalHours: $("statNormalHours"),
     statNormalPay: $("statNormalPay"),
@@ -1299,7 +1300,7 @@
    * Summary
    * ========================================================== */
   var summaryState = { mode: "month", anchor: new Date() };
-  var exportMonthRange = null; // { start, end } Date objects for the currently viewed month, set by renderMonthSummary
+  var exportMonthRange = null; // { start, end } Date objects for the currently viewed period, set by renderMonthSummary/renderYearSummary
   var exportRangeMode = "month"; // "month" | "custom" - which option is selected inside the export modal
 
   els.summaryModeTabs.addEventListener("click", function (e) {
@@ -1315,13 +1316,14 @@
   els.periodPrev.addEventListener("click", function () { shiftPeriod(-1); });
   els.periodNext.addEventListener("click", function () { shiftPeriod(1); });
 
-  // Export modal: choose "เดือนนี้" (defaults to whatever month is currently
-  // being viewed in Summary, via exportMonthRange) or a custom date range,
-  // then build the .xlsx on confirm. Opening is a no-op outside month view
-  // since the button itself is hidden there (see renderYearSummary).
+  // Export modal: choose the quick range (defaults to whatever period is
+  // currently viewed in Summary, via exportMonthRange - a month or a full
+  // year) or a custom date range, then build the .xlsx on confirm.
   function openExportModal() {
     if (!exportMonthRange) return;
     exportRangeMode = "month";
+    var quickRangeBtn = els.exportRangeTabs.querySelector('[data-range="month"]');
+    if (quickRangeBtn) quickRangeBtn.textContent = summaryState.mode === "year" ? "ปีนี้" : "เดือนนี้";
     Array.prototype.forEach.call(els.exportRangeTabs.children, function (b) {
       b.classList.toggle("is-active", b.dataset.range === "month");
     });
@@ -1368,15 +1370,14 @@
         els.exportRangeError.classList.remove("hidden");
         return;
       }
-      var startStamp = startISO.slice(0, 7);
-      var endStamp = endISO.slice(0, 7);
-      filenameStamp = startStamp === endStamp ? startStamp : (startStamp + "-to-" + endStamp);
     } else {
       if (!exportMonthRange) return;
       startISO = toISODate(exportMonthRange.start);
       endISO = toISODate(exportMonthRange.end);
-      filenameStamp = startISO.slice(0, 7);
     }
+    var startStamp = startISO.slice(0, 7);
+    var endStamp = endISO.slice(0, 7);
+    filenameStamp = startStamp === endStamp ? startStamp : (startStamp + "-to-" + endStamp);
     els.exportRangeError.classList.add("hidden");
 
     var entries = entriesBetween(startISO, endISO)
@@ -1486,6 +1487,7 @@
     els.periodLabel.textContent = periodLabelText(range);
     updateSummaryRecorderLine();
     els.exportExcelBtn.classList.remove("hidden");
+    els.exportHint.textContent = "ดาวน์โหลดรายการบันทึกเวลาของเดือนนี้เป็นไฟล์ Excel";
     exportMonthRange = range;
 
     var agg = monthAgg(a.getFullYear(), a.getMonth());
@@ -1511,8 +1513,9 @@
     var range = getPeriodRange();
     els.periodLabel.textContent = periodLabelText(range);
     updateSummaryRecorderLine();
-    els.exportExcelBtn.classList.add("hidden");
-    exportMonthRange = null;
+    els.exportExcelBtn.classList.remove("hidden");
+    els.exportHint.textContent = "ดาวน์โหลดรายการบันทึกเวลาของปีนี้เป็นไฟล์ Excel";
+    exportMonthRange = range;
 
     var agg = yearAgg(year);
     var prevAgg = yearAgg(year - 1);
