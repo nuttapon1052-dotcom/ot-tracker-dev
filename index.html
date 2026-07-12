@@ -124,6 +124,10 @@
       <button id="periodNext" class="btn btn--icon" type="button" aria-label="ถัดไป">›</button>
     </div>
 
+    <div class="export-row">
+      <button type="button" id="exportExcelBtn" class="btn btn--secondary btn--small">📊 Export Excel (.xlsx)</button>
+    </div>
+
     <div class="hero-stats">
       <div class="hero-stat hero-stat--pay">
         <div class="hero-stat__label">รายได้รวม</div>
@@ -147,6 +151,7 @@
         <div class="stat-tile__label">เงิน OT</div>
         <div class="stat-tile__value" id="statOtPay">฿0</div>
         <div class="stat-tile__sub" id="statTotalHours">0 ชม.</div>
+        <div class="stat-tile__compare" id="compareOtPay"></div>
       </div>
     </div>
 
@@ -192,6 +197,19 @@
         </div>
       </div>
       <p class="hint">เงินเดือนเป็นตัวเลขคงที่ที่ตั้งไว้ ไม่เกี่ยวกับชั่วโมงทำงาน · ยอดนี้เป็นยอดก่อนหักภาษี/ประกันสังคม</p>
+    </div>
+
+    <div id="goalProgressCard" class="card form-card hidden">
+      <h2 class="card__title">เป้าหมายเงิน OT เดือนนี้</h2>
+      <div class="goal-progress">
+        <div class="goal-progress__top">
+          <span id="goalProgressValue">฿0 / ฿0</span>
+          <span id="goalProgressPct">0%</span>
+        </div>
+        <div class="goal-progress__bar">
+          <div class="goal-progress__bar-fill" id="goalProgressFill" style="width:0%"></div>
+        </div>
+      </div>
     </div>
 
     <div class="list-header">
@@ -260,6 +278,13 @@
       <div class="field">
         <label for="s-hourlyrate" id="hourlyRateLabel">ค่าแรงต่อชั่วโมง</label>
         <input type="text" id="s-hourlyrate" class="money-input" inputmode="decimal" autocomplete="off" />
+      </div>
+
+      <h2 class="card__title card__title--spaced">เป้าหมายรายเดือน</h2>
+      <div class="field">
+        <label for="s-otgoal" id="otGoalLabel">เป้าหมายเงิน OT ต่อเดือน</label>
+        <input type="text" id="s-otgoal" class="money-input" inputmode="decimal" autocomplete="off" placeholder="0" />
+        <p class="hint">ตั้งไว้ 0 เพื่อปิดการแสดงผลความคืบหน้าในหน้าสรุป</p>
       </div>
 
       <h2 class="card__title card__title--spaced">เวลาเข้า-ออกงานปกติ</h2>
@@ -590,6 +615,7 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

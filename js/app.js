@@ -15,6 +15,7 @@
       monthlySalary: 2000000, // fixed figure shown in the monthly summary, not used in any calculation
       otMultiplier: 1.5,
       weekendOtMultiplier: 1.5,
+      otGoal: 0, // เป้าหมายเงิน OT ต่อเดือน, 0 = ยังไม่ได้ตั้งเป้าหมาย
       // standard daily schedule - drives normal-hours / OT calculation
       workStart: "08:00",
       lunchStart: "12:00",
@@ -372,6 +373,7 @@
     periodPrev: $("periodPrev"),
     periodNext: $("periodNext"),
     periodLabel: $("periodLabel"),
+    exportExcelBtn: $("exportExcelBtn"),
     summaryRecorderLine: $("summaryRecorderLine"),
     statNormalHours: $("statNormalHours"),
     statNormalPay: $("statNormalPay"),
@@ -381,6 +383,7 @@
     statTotalHours: $("statTotalHours"),
     compareTotalPay: $("compareTotalPay"),
     compareOtHours: $("compareOtHours"),
+    compareOtPay: $("compareOtPay"),
     dayListTitle: $("dayListTitle"),
     summaryDays: $("summaryDays"),
     chartTitle: $("chartTitle"),
@@ -392,6 +395,11 @@
     sbSalary: $("sbSalary"),
     sbOtPay: $("sbOtPay"),
     sbTotal: $("sbTotal"),
+
+    goalProgressCard: $("goalProgressCard"),
+    goalProgressValue: $("goalProgressValue"),
+    goalProgressPct: $("goalProgressPct"),
+    goalProgressFill: $("goalProgressFill"),
 
     sRecorderName: $("s-recordername"),
     sDefaultTimeIn: $("s-defaulttimein"),
@@ -408,8 +416,10 @@
     currencyClose: $("currencyClose"),
     hourlyRateLabel: $("hourlyRateLabel"),
     monthlySalaryLabel: $("monthlySalaryLabel"),
+    otGoalLabel: $("otGoalLabel"),
     sHourlyRate: $("s-hourlyrate"),
     sMonthlySalary: $("s-monthlysalary"),
+    sOtGoal: $("s-otgoal"),
     sWorkStart: $("s-workstart"),
     sHasLunchBreak: $("s-haslunchbreak"),
     sLunchStart: $("s-lunchstart"),
@@ -884,6 +894,7 @@
    * Summary
    * ========================================================== */
   var summaryState = { mode: "month", anchor: new Date() };
+  var exportMonthRange = null; // { start, end } Date objects for the currently viewed month, set by renderMonthSummary
 
   els.summaryModeTabs.addEventListener("click", function (e) {
     var btn = e.target.closest(".segmented__btn");
@@ -897,6 +908,42 @@
 
   els.periodPrev.addEventListener("click", function () { shiftPeriod(-1); });
   els.periodNext.addEventListener("click", function () { shiftPeriod(1); });
+
+  els.exportExcelBtn.addEventListener("click", function () {
+    if (!exportMonthRange) return;
+    if (typeof XLSX === "undefined") {
+      showToast("โหลดไลบรารี Excel ไม่สำเร็จ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่");
+      return;
+    }
+
+    var entries = entriesBetween(toISODate(exportMonthRange.start), toISODate(exportMonthRange.end))
+      .slice()
+      .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+
+    if (!entries.length) {
+      showToast("ไม่มีข้อมูลในเดือนนี้ให้ export");
+      return;
+    }
+
+    var rows = entries.map(function (e) {
+      var c = computeEntry(e, state.settings);
+      return {
+        "วันที่": e.date,
+        "เวลาเข้า": e.timeIn || "",
+        "เวลาออก": e.timeOut || "",
+        "ชั่วโมงปกติ": c ? Math.round(c.normalHours * 100) / 100 : 0,
+        "ชั่วโมง OT": c ? Math.round(c.otHours * 100) / 100 : 0,
+        "เงิน OT": c ? Math.round(c.otPay * 100) / 100 : 0
+      };
+    });
+
+    var ws = XLSX.utils.json_to_sheet(rows);
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "OT");
+    var stamp = toISODate(exportMonthRange.start).slice(0, 7);
+    XLSX.writeFile(wb, "ot-tracker-" + stamp + ".xlsx");
+    showToast("Export Excel แล้ว ✓");
+  });
 
   function shiftPeriod(dir) {
     if (summaryState.mode === "year") {
@@ -975,6 +1022,8 @@
     var range = getPeriodRange();
     els.periodLabel.textContent = periodLabelText(range);
     updateSummaryRecorderLine();
+    els.exportExcelBtn.classList.remove("hidden");
+    exportMonthRange = range;
 
     var agg = monthAgg(a.getFullYear(), a.getMonth());
     var prev = addMonths(a, -1);
@@ -983,11 +1032,13 @@
     fillStatTiles(agg);
     els.compareTotalPay.innerHTML = changeBadgeHtml(agg.totalPay, prevAgg.totalPay, "จากเดือนก่อน");
     els.compareOtHours.innerHTML = changeBadgeHtml(agg.otHours, prevAgg.otHours, "จากเดือนก่อน");
+    els.compareOtPay.innerHTML = changeBadgeHtml(agg.otPay, prevAgg.otPay, "จากเดือนก่อน");
 
     els.chartTitle.textContent = "แนวโน้ม OT ย้อนหลัง 6 เดือน";
     els.dayListTitle.textContent = "รายวันในเดือนนี้";
 
     renderSalaryBreakdown(agg, true);
+    renderGoalProgress(agg, true);
     renderSummaryDays(entriesBetween(toISODate(range.start), toISODate(range.end)));
     renderTrendChart(computeMonthlyOtTrend(a));
   }
@@ -997,6 +1048,8 @@
     var range = getPeriodRange();
     els.periodLabel.textContent = periodLabelText(range);
     updateSummaryRecorderLine();
+    els.exportExcelBtn.classList.add("hidden");
+    exportMonthRange = null;
 
     var agg = yearAgg(year);
     var prevAgg = yearAgg(year - 1);
@@ -1004,11 +1057,13 @@
     fillStatTiles(agg);
     els.compareTotalPay.innerHTML = changeBadgeHtml(agg.totalPay, prevAgg.totalPay, "จากปีก่อน");
     els.compareOtHours.innerHTML = changeBadgeHtml(agg.otHours, prevAgg.otHours, "จากปีก่อน");
+    els.compareOtPay.innerHTML = changeBadgeHtml(agg.otPay, prevAgg.otPay, "จากปีก่อน");
 
     els.chartTitle.textContent = "OT รายเดือนของปีนี้";
     els.dayListTitle.textContent = "สรุปรายเดือนในปีนี้";
 
     renderSalaryBreakdown(agg, false);
+    renderGoalProgress(agg, false);
     renderSummaryMonths(year);
     renderTrendChart(computeYearlyMonthlyBreakdown(year));
   }
@@ -1157,6 +1212,22 @@
     els.sbTotal.textContent = fmtMoney(total);
   }
 
+  // Progress bar for the "เป้าหมายเงิน OT ต่อเดือน" setting - only makes
+  // sense against a single month's OT pay, so it's hidden entirely in year
+  // mode (showCard=false) or whenever no goal has been set (otGoal <= 0).
+  function renderGoalProgress(agg, showCard) {
+    var goal = state.settings.otGoal || 0;
+    var visible = showCard && goal > 0;
+    els.goalProgressCard.classList.toggle("hidden", !visible);
+    if (!visible) return;
+
+    var pct = Math.min(100, Math.round((agg.otPay / goal) * 100));
+    els.goalProgressValue.textContent = fmtMoney(agg.otPay) + " / " + fmtMoney(goal);
+    els.goalProgressPct.textContent = pct + "%";
+    els.goalProgressFill.style.width = pct + "%";
+    els.goalProgressFill.classList.toggle("is-complete", agg.otPay >= goal);
+  }
+
   function summaryRowHtml(label, agg, maxHours) {
     maxHours = maxHours || 1;
     return (
@@ -1234,8 +1305,10 @@
     updateCurrencyTrigger();
     els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
     els.monthlySalaryLabel.textContent = "เงินเดือน (" + cur.symbol + " " + cur.label + ")";
+    els.otGoalLabel.textContent = "เป้าหมายเงิน OT ต่อเดือน (" + cur.symbol + " " + cur.label + ")";
     setMoneyInputValue(els.sHourlyRate, s.hourlyRate);
     setMoneyInputValue(els.sMonthlySalary, s.monthlySalary);
+    setMoneyInputValue(els.sOtGoal, s.otGoal);
     els.sWorkStart.value = s.workStart;
     els.sHasLunchBreak.checked = !!s.hasLunchBreak;
     els.sLunchStart.value = s.lunchStart;
@@ -1394,7 +1467,7 @@
   });
 
   var settingsInputs = [
-    els.sHourlyRate, els.sMonthlySalary, els.sOtMultiplier, els.sWeekendOtMultiplier,
+    els.sHourlyRate, els.sMonthlySalary, els.sOtGoal, els.sOtMultiplier, els.sWeekendOtMultiplier,
     els.sWorkStart, els.sLunchStart, els.sLunchEnd, els.sNormalEnd,
     els.sMandatoryOtEnd, els.sEveningBreakStart, els.sEveningBreakEnd
   ];
@@ -1402,6 +1475,7 @@
     input.addEventListener("input", function () {
       state.settings.hourlyRate = parseMoneyInput(els.sHourlyRate);
       state.settings.monthlySalary = parseMoneyInput(els.sMonthlySalary);
+      state.settings.otGoal = parseMoneyInput(els.sOtGoal);
       state.settings.otMultiplier = Number(els.sOtMultiplier.value) || 1;
       state.settings.weekendOtMultiplier = Number(els.sWeekendOtMultiplier.value) || 1;
       state.settings.workStart = els.sWorkStart.value || DEFAULT_STATE.settings.workStart;
