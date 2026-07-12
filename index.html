@@ -227,7 +227,7 @@
   <section id="view-settings" class="view hidden">
     <div class="card form-card">
       <h2 class="card__title">บัญชีผู้ใช้ (Google)</h2>
-      <p class="hint">เข้าสู่ระบบด้วย Google — ตอนนี้ยังไม่มีการซิงก์ข้อมูล ข้อมูลทั้งหมดยังคงเก็บอยู่ในเครื่องนี้เหมือนเดิม</p>
+      <p class="hint">เข้าสู่ระบบด้วย Google เพื่อซิงก์ข้อมูลขึ้น cloud อัตโนมัติ — ใช้งานต่อได้จากอุปกรณ์อื่น ข้อมูลยังคงถูกเก็บไว้ในเครื่องนี้ด้วยเช่นกันเพื่อให้ใช้งานแบบออฟไลน์ได้</p>
 
       <div id="authSignedOut">
         <button type="button" id="googleLoginBtn" class="google-btn">
@@ -590,6 +590,34 @@
     </div>
     <div class="calendar-actions">
       <button type="button" id="currencyClose" class="btn btn--primary btn--small">ปิด</button>
+    </div>
+  </div>
+</div>
+
+<div id="exportOverlay" class="confirm-overlay hidden">
+  <div class="currency-box">
+    <h3 class="currency-box__title">Export Excel (.xlsx)</h3>
+
+    <div class="segmented" id="exportRangeTabs">
+      <button type="button" class="segmented__btn is-active" data-range="month">เดือนนี้</button>
+      <button type="button" class="segmented__btn" data-range="custom">กำหนดช่วงวันที่เอง</button>
+    </div>
+
+    <div class="field-row" id="exportCustomRange">
+      <div class="field">
+        <label for="exportRangeStart">วันที่เริ่มต้น</label>
+        <input type="date" id="exportRangeStart" />
+      </div>
+      <div class="field">
+        <label for="exportRangeEnd">วันที่สิ้นสุด</label>
+        <input type="date" id="exportRangeEnd" />
+      </div>
+    </div>
+    <p class="hint hint--error hidden" id="exportRangeError">กรุณาเลือกวันที่เริ่มต้นและสิ้นสุดให้ถูกต้อง (วันที่เริ่มต้นต้องไม่เกินวันที่สิ้นสุด)</p>
+
+    <div class="calendar-actions">
+      <button type="button" id="exportCancelBtn" class="btn btn--ghost btn--small">ยกเลิก</button>
+      <button type="button" id="exportConfirmBtn" class="btn btn--primary btn--small">ดาวน์โหลด</button>
     </div>
   </div>
 </div>

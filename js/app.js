@@ -374,6 +374,14 @@
     periodNext: $("periodNext"),
     periodLabel: $("periodLabel"),
     exportExcelBtn: $("exportExcelBtn"),
+    exportOverlay: $("exportOverlay"),
+    exportRangeTabs: $("exportRangeTabs"),
+    exportCustomRange: $("exportCustomRange"),
+    exportRangeStart: $("exportRangeStart"),
+    exportRangeEnd: $("exportRangeEnd"),
+    exportRangeError: $("exportRangeError"),
+    exportCancelBtn: $("exportCancelBtn"),
+    exportConfirmBtn: $("exportConfirmBtn"),
     summaryRecorderLine: $("summaryRecorderLine"),
     statNormalHours: $("statNormalHours"),
     statNormalPay: $("statNormalPay"),
@@ -895,6 +903,7 @@
    * ========================================================== */
   var summaryState = { mode: "month", anchor: new Date() };
   var exportMonthRange = null; // { start, end } Date objects for the currently viewed month, set by renderMonthSummary
+  var exportRangeMode = "month"; // "month" | "custom" - which option is selected inside the export modal
 
   els.summaryModeTabs.addEventListener("click", function (e) {
     var btn = e.target.closest(".segmented__btn");
@@ -909,19 +918,76 @@
   els.periodPrev.addEventListener("click", function () { shiftPeriod(-1); });
   els.periodNext.addEventListener("click", function () { shiftPeriod(1); });
 
-  els.exportExcelBtn.addEventListener("click", function () {
+  // Export modal: choose "เดือนนี้" (defaults to whatever month is currently
+  // being viewed in Summary, via exportMonthRange) or a custom date range,
+  // then build the .xlsx on confirm. Opening is a no-op outside month view
+  // since the button itself is hidden there (see renderYearSummary).
+  function openExportModal() {
     if (!exportMonthRange) return;
+    exportRangeMode = "month";
+    Array.prototype.forEach.call(els.exportRangeTabs.children, function (b) {
+      b.classList.toggle("is-active", b.dataset.range === "month");
+    });
+    els.exportCustomRange.classList.add("hidden");
+    els.exportRangeError.classList.add("hidden");
+    els.exportRangeStart.value = toISODate(exportMonthRange.start);
+    els.exportRangeEnd.value = toISODate(exportMonthRange.end);
+    els.exportOverlay.classList.remove("hidden");
+  }
+
+  function closeExportModal() {
+    els.exportOverlay.classList.add("hidden");
+  }
+
+  els.exportExcelBtn.addEventListener("click", openExportModal);
+  els.exportCancelBtn.addEventListener("click", closeExportModal);
+  els.exportOverlay.addEventListener("click", function (e) {
+    if (e.target === els.exportOverlay) closeExportModal();
+  });
+
+  els.exportRangeTabs.addEventListener("click", function (e) {
+    var btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    exportRangeMode = btn.dataset.range;
+    Array.prototype.forEach.call(els.exportRangeTabs.children, function (b) {
+      b.classList.toggle("is-active", b === btn);
+    });
+    els.exportCustomRange.classList.toggle("hidden", exportRangeMode !== "custom");
+    els.exportRangeError.classList.add("hidden");
+  });
+
+  els.exportConfirmBtn.addEventListener("click", function () {
     if (typeof XLSX === "undefined") {
       showToast("โหลดไลบรารี Excel ไม่สำเร็จ ลองเชื่อมต่ออินเทอร์เน็ตแล้วลองใหม่");
       return;
     }
 
-    var entries = entriesBetween(toISODate(exportMonthRange.start), toISODate(exportMonthRange.end))
+    var startISO, endISO, filenameStamp;
+
+    if (exportRangeMode === "custom") {
+      startISO = els.exportRangeStart.value;
+      endISO = els.exportRangeEnd.value;
+      if (!startISO || !endISO || startISO > endISO) {
+        els.exportRangeError.classList.remove("hidden");
+        return;
+      }
+      var startStamp = startISO.slice(0, 7);
+      var endStamp = endISO.slice(0, 7);
+      filenameStamp = startStamp === endStamp ? startStamp : (startStamp + "-to-" + endStamp);
+    } else {
+      if (!exportMonthRange) return;
+      startISO = toISODate(exportMonthRange.start);
+      endISO = toISODate(exportMonthRange.end);
+      filenameStamp = startISO.slice(0, 7);
+    }
+    els.exportRangeError.classList.add("hidden");
+
+    var entries = entriesBetween(startISO, endISO)
       .slice()
       .sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
 
     if (!entries.length) {
-      showToast("ไม่มีข้อมูลในเดือนนี้ให้ export");
+      showToast("ไม่มีข้อมูลในช่วงวันที่ที่เลือก");
       return;
     }
 
@@ -940,9 +1006,9 @@
     var ws = XLSX.utils.json_to_sheet(rows);
     var wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "OT");
-    var stamp = toISODate(exportMonthRange.start).slice(0, 7);
-    XLSX.writeFile(wb, "ot-tracker-" + stamp + ".xlsx");
+    XLSX.writeFile(wb, "ot-tracker-" + filenameStamp + ".xlsx");
     showToast("Export Excel แล้ว ✓");
+    closeExportModal();
   });
 
   function shiftPeriod(dir) {

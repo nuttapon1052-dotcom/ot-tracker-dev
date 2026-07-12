@@ -257,6 +257,7 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
   margin: 4px 0 0;
   line-height: 1.5;
 }
+.hint--error{ color: var(--status-critical); font-weight:600; }
 
 .weekend-notice{
   font-size: 12px; font-weight:700; color: var(--series-ot);
