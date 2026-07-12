@@ -2607,26 +2607,39 @@
   function savePushSubscription(sub) {
     if (!supabaseClient || !currentUserId) return Promise.resolve();
     var json = sub.toJSON();
+    console.log("[push debug] savePushSubscription: upserting", { user_id: currentUserId, endpoint: json.endpoint });
     return supabaseClient.from("push_subscriptions").upsert({
       user_id: currentUserId,
       endpoint: json.endpoint,
       p256dh: json.keys.p256dh,
       auth: json.keys.auth
-    }, { onConflict: "user_id,endpoint" });
+    }, { onConflict: "user_id,endpoint" }).then(function (res) {
+      console.log("[push debug] savePushSubscription result", res);
+      if (res.error) throw res.error;
+      return res;
+    });
   }
 
   function deletePushSubscription(endpoint) {
     if (!supabaseClient || !currentUserId) return Promise.resolve();
-    return supabaseClient.from("push_subscriptions").delete().eq("user_id", currentUserId).eq("endpoint", endpoint);
+    return supabaseClient.from("push_subscriptions").delete().eq("user_id", currentUserId).eq("endpoint", endpoint)
+      .then(function (res) {
+        console.log("[push debug] deletePushSubscription result", res);
+        if (res.error) throw res.error;
+        return res;
+      });
   }
 
   function subscribeToPush() {
+    console.log("[push debug] subscribeToPush: waiting for serviceWorker.ready");
     return navigator.serviceWorker.ready.then(function (reg) {
+      console.log("[push debug] serviceWorker ready, calling pushManager.subscribe", reg);
       return reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
       });
     }).then(function (sub) {
+      console.log("[push debug] pushManager.subscribe succeeded", sub);
       return savePushSubscription(sub);
     });
   }
@@ -2644,6 +2657,7 @@
   }
 
   els.sPushEnabled.addEventListener("change", function () {
+    console.log("[push debug] toggle change fired, checked =", els.sPushEnabled.checked);
     if (!els.sPushEnabled.checked) {
       unsubscribeFromPush().then(function () {
         showToast("ปิดการแจ้งเตือนแบบ Push แล้ว");
@@ -2654,23 +2668,28 @@
     }
 
     if (!pushSupported()) {
+      console.log("[push debug] pushSupported() = false, aborting");
       els.sPushEnabled.checked = false;
       showToast("อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)");
       return;
     }
     if (!currentUserId) {
+      console.log("[push debug] currentUserId is falsy, aborting");
       els.sPushEnabled.checked = false;
       showToast("กรุณาเข้าสู่ระบบก่อนเปิดการแจ้งเตือนแบบ Push");
       return;
     }
 
+    console.log("[push debug] requesting Notification permission");
     Notification.requestPermission().then(function (permission) {
+      console.log("[push debug] Notification.requestPermission resolved:", permission);
       if (permission !== "granted") {
         showToast("การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน");
         refreshPushToggleState();
         return;
       }
       subscribeToPush().then(function () {
+        console.log("[push debug] subscribeToPush chain completed successfully");
         showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓");
         refreshPushToggleState();
       }).catch(function (err) {
