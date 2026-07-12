@@ -1,0 +1,1705 @@
+(function () {
+  "use strict";
+
+  /* ============================================================
+   * Storage
+   * ========================================================== */
+  var STORAGE_KEY = "ot-tracker-data-v1";
+
+  var DEFAULT_STATE = {
+    version: 1,
+    settings: {
+      recorderName: "", // shown in the header and summary page
+      currency: "KRW", // 'KRW' | 'THB' | 'JPY' | 'TWD' | 'USD' | 'MYR' | 'ILS' | 'SGD'
+      hourlyRate: 10000, // used to calculate OT pay only
+      monthlySalary: 2000000, // fixed figure shown in the monthly summary, not used in any calculation
+      otMultiplier: 1.5,
+      weekendOtMultiplier: 1.5,
+      // standard daily schedule - drives normal-hours / OT calculation
+      workStart: "08:00",
+      lunchStart: "12:00",
+      lunchEnd: "13:00",
+      normalEnd: "17:00",
+      mandatoryOtEnd: "18:00",
+      eveningBreakStart: "18:00",
+      eveningBreakEnd: "18:30",
+      // on by default so existing users see no change in behavior; turning
+      // one off removes that whole window from the calculation (see
+      // effectiveSchedule)
+      hasLunchBreak: true,
+      hasMandatoryOt: true,
+      hasEveningBreak: true,
+      // entry-form autofill only - unrelated to the OT calculation above.
+      // Blank/off until the user opts in, on purpose: no baked-in default.
+      defaultTimeIn: "",
+      defaultTimeOut: "",
+      lockTimeIn: false,
+      lockTimeOut: false
+    },
+    entries: [] // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
+  };
+
+  var CURRENCIES = {
+    KRW: { symbol: "₩", decimals: 0, locale: "ko-KR", label: "วอนเกาหลี" },
+    THB: { symbol: "฿", decimals: 2, locale: "th-TH", label: "บาทไทย" },
+    JPY: { symbol: "¥", decimals: 0, locale: "ja-JP", label: "เยนญี่ปุ่น" },
+    TWD: { symbol: "NT$", decimals: 0, locale: "zh-TW", label: "ดอลลาร์ไต้หวัน" },
+    USD: { symbol: "$", decimals: 2, locale: "en-US", label: "ดอลลาร์สหรัฐ" },
+    MYR: { symbol: "RM", decimals: 2, locale: "ms-MY", label: "มาเลเซียริงกิต" },
+    ILS: { symbol: "₪", decimals: 2, locale: "he-IL", label: "อิสราเอลเชคเกล" },
+    SGD: { symbol: "S$", decimals: 2, locale: "en-SG", label: "ดอลลาร์สิงคโปร์" }
+  };
+
+  function currentCurrency() {
+    return CURRENCIES[state.settings.currency] || CURRENCIES.KRW;
+  }
+
+  function loadState() {
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return clone(DEFAULT_STATE);
+      var parsed = JSON.parse(raw);
+      var state = clone(DEFAULT_STATE);
+      state.settings = Object.assign({}, state.settings, parsed.settings || {});
+      state.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
+      return state;
+    } catch (e) {
+      console.error("โหลดข้อมูลผิดพลาด", e);
+      return clone(DEFAULT_STATE);
+    }
+  }
+
+  function saveState() {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    pushStateToCloud();
+  }
+
+  function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+  var state = loadState();
+
+  /* ============================================================
+   * Helpers
+   * ========================================================== */
+  function uid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "id-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+  }
+
+  function pad2(n) { return String(n).padStart(2, "0"); }
+
+  function toISODate(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+
+  function fromISODate(s) {
+    var parts = s.split("-").map(Number);
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+
+  function addDays(d, n) {
+    var r = new Date(d);
+    r.setDate(r.getDate() + n);
+    return r;
+  }
+
+  function addMonths(d, n) {
+    var r = new Date(d.getFullYear(), d.getMonth() + n, 1);
+    return r;
+  }
+
+  function timeToMinutes(t) {
+    var parts = t.split(":").map(Number);
+    return parts[0] * 60 + parts[1];
+  }
+
+  function fmtHours(h) {
+    return (Math.round(h * 100) / 100).toLocaleString("th-TH", { minimumFractionDigits: 1, maximumFractionDigits: 2 });
+  }
+
+  function fmtMoney(v) {
+    var cur = currentCurrency();
+    var factor = Math.pow(10, cur.decimals);
+    var rounded = Math.round(v * factor) / factor;
+    return cur.symbol + rounded.toLocaleString(cur.locale, { minimumFractionDigits: cur.decimals, maximumFractionDigits: cur.decimals });
+  }
+
+  /* ============================================================
+   * Comma-formatted money inputs
+   *
+   * Any <input class="money-input"> gets live thousands-separator
+   * formatting while typing, with the cursor kept in place by counting
+   * digits (not punctuation) to its left and re-finding that same digit
+   * offset in the reformatted string. The underlying numeric value is
+   * always recovered with parseMoneyInput() by stripping the commas.
+   * ========================================================== */
+  function formatMoneyDisplay(raw) {
+    var cleaned = String(raw).replace(/[^\d.]/g, "");
+    var firstDot = cleaned.indexOf(".");
+    if (firstDot !== -1) {
+      cleaned = cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
+    }
+    var parts = cleaned.split(".");
+    var intPart = parts[0].replace(/^0+(?=\d)/, "");
+    var intFormatted = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    return parts.length > 1 ? intFormatted + "." + parts[1] : intFormatted;
+  }
+
+  function countDigitsBefore(str, pos) {
+    var count = 0;
+    for (var i = 0; i < pos && i < str.length; i++) {
+      if (/\d/.test(str[i])) count++;
+    }
+    return count;
+  }
+
+  function positionAfterNDigits(str, n) {
+    if (n <= 0) return 0;
+    var count = 0;
+    for (var i = 0; i < str.length; i++) {
+      if (/\d/.test(str[i])) {
+        count++;
+        if (count === n) return i + 1;
+      }
+    }
+    return str.length;
+  }
+
+  function setMoneyInputValue(el, num) {
+    el.value = formatMoneyDisplay(String(num || 0));
+  }
+
+  function parseMoneyInput(el) {
+    return Number(el.value.replace(/,/g, "")) || 0;
+  }
+
+  function initMoneyInputs(root) {
+    Array.prototype.forEach.call(root.querySelectorAll(".money-input"), function (el) {
+      el.addEventListener("input", function () {
+        var oldValue = el.value;
+        var oldPos = el.selectionStart == null ? oldValue.length : el.selectionStart;
+        var digitsBefore = countDigitsBefore(oldValue, oldPos);
+        var newValue = formatMoneyDisplay(oldValue);
+        if (newValue !== oldValue) el.value = newValue;
+        var newPos = positionAfterNDigits(newValue, digitsBefore);
+        el.setSelectionRange(newPos, newPos);
+      });
+    });
+  }
+
+  var dfFull = new Intl.DateTimeFormat("th-TH", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  var dfShort = new Intl.DateTimeFormat("th-TH", { weekday: "short", day: "numeric", month: "short" });
+  var dfMonthYear = new Intl.DateTimeFormat("th-TH", { month: "long", year: "numeric" });
+  var dfYear = new Intl.DateTimeFormat("th-TH", { year: "numeric" });
+  var dfMonthShort = new Intl.DateTimeFormat("th-TH", { month: "short" });
+
+  /* ============================================================
+   * Calculation core
+   *
+   * The work day is a fixed schedule (all configurable in Settings):
+   *   [workStart      -> lunchStart]        normal work
+   *   [lunchStart      -> lunchEnd]          lunch break (never counted)
+   *   [lunchEnd        -> normalEnd]         normal work
+   *   [normalEnd       -> mandatoryOtEnd]    OT (mandatory block, prorated
+   *                                          if the actual clock-out falls
+   *                                          inside this window)
+   *   [mandatoryOtEnd  -> eveningBreakStart] OT (only non-zero if the two
+   *                                          settings are configured apart)
+   *   [eveningBreakStart -> eveningBreakEnd] evening break (never counted)
+   *   [eveningBreakEnd  -> actual clock-out] OT, open-ended
+   *
+   * Normal hours = overlap of the actual clocked interval with the two
+   * "normal work" segments. OT hours = overlap with the OT segments. Breaks
+   * are simply never summed into either, regardless of whether the
+   * employee was still clocked in during them.
+   * ========================================================== */
+  var OPEN_ENDED = 100000; // minutes; stands in for "no upper bound"
+
+  function overlapMinutes(aStart, aEnd, bStart, bEnd) {
+    return Math.max(0, Math.min(aEnd, bEnd) - Math.max(aStart, bStart));
+  }
+
+  // Resolves the schedule to actual clock-time boundaries, collapsing any
+  // window whose toggle is off to zero width so it drops out of every
+  // overlap calculation below without needing separate on/off branches.
+  function effectiveSchedule(settings) {
+    var ws = timeToMinutes(settings.workStart);
+    var ne = timeToMinutes(settings.normalEnd);
+    return {
+      ws: ws,
+      ne: ne,
+      ls: settings.hasLunchBreak ? timeToMinutes(settings.lunchStart) : ne,
+      le: settings.hasLunchBreak ? timeToMinutes(settings.lunchEnd) : ne,
+      moe: settings.hasMandatoryOt ? timeToMinutes(settings.mandatoryOtEnd) : ne,
+      ebs: settings.hasEveningBreak ? timeToMinutes(settings.eveningBreakStart) : OPEN_ENDED,
+      ebe: settings.hasEveningBreak ? timeToMinutes(settings.eveningBreakEnd) : OPEN_ENDED
+    };
+  }
+
+  function scheduleNormalHoursPerDay(settings) {
+    var sch = effectiveSchedule(settings);
+    var minutes =
+      overlapMinutes(0, OPEN_ENDED, sch.ws, sch.ls) +
+      overlapMinutes(0, OPEN_ENDED, sch.le, sch.ne);
+    return minutes / 60;
+  }
+
+  function effectiveHourlyRate(settings) {
+    return settings.hourlyRate || 0;
+  }
+
+  function isWeekendDate(dateStr) {
+    if (!dateStr) return false;
+    var day = fromISODate(dateStr).getDay(); // 0 Sun .. 6 Sat
+    return day === 0 || day === 6;
+  }
+
+  // returns null if inputs invalid
+  function computeEntry(entry, settings) {
+    if (!entry.timeIn || !entry.timeOut) return null;
+    var inMin = timeToMinutes(entry.timeIn);
+    var outMin = timeToMinutes(entry.timeOut);
+    var overnight = outMin <= inMin;
+    if (overnight) outMin += 24 * 60; // overnight shift
+
+    var weekend = isWeekendDate(entry.date);
+    var sch = effectiveSchedule(settings);
+
+    var normalMin, otMin;
+
+    if (weekend) {
+      // Weekends have no normal-hours threshold, no mandatory-OT block, and
+      // no evening-break buffer: every worked minute is OT, lunch excluded.
+      normalMin = 0;
+      otMin = Math.max(0, (outMin - inMin) - overlapMinutes(inMin, outMin, sch.ls, sch.le));
+    } else {
+      normalMin =
+        overlapMinutes(inMin, outMin, sch.ws, sch.ls) +
+        overlapMinutes(inMin, outMin, sch.le, sch.ne);
+
+      otMin =
+        overlapMinutes(inMin, outMin, sch.ne, sch.moe) +
+        overlapMinutes(inMin, outMin, sch.moe, sch.ebs) +
+        overlapMinutes(inMin, outMin, sch.ebe, OPEN_ENDED);
+    }
+
+    var normalHours = normalMin / 60;
+    var otHours = otMin / 60;
+    var workHours = normalHours + otHours;
+
+    var rate = effectiveHourlyRate(settings);
+    var defaultMultiplier = weekend ? (settings.weekendOtMultiplier || 1.5) : (settings.otMultiplier || 1);
+    var multiplier = (entry.otMultiplier === null || entry.otMultiplier === undefined)
+      ? defaultMultiplier
+      : entry.otMultiplier;
+
+    var normalPay = normalHours * rate;
+    var otPay = otHours * rate * multiplier;
+
+    return {
+      workHours: workHours,
+      normalHours: normalHours,
+      otHours: otHours,
+      rate: rate,
+      multiplier: multiplier,
+      normalPay: normalPay,
+      otPay: otPay,
+      totalPay: normalPay + otPay,
+      overnight: overnight,
+      weekend: weekend
+    };
+  }
+
+  function aggregate(entries, settings) {
+    var agg = {
+      normalHours: 0, otHours: 0, normalPay: 0, otPay: 0, totalPay: 0, totalHours: 0, count: 0,
+      otHoursWeekday: 0, otPayWeekday: 0, otHoursWeekend: 0, otPayWeekend: 0
+    };
+    entries.forEach(function (e) {
+      var c = computeEntry(e, settings);
+      if (!c) return;
+      agg.normalHours += c.normalHours;
+      agg.otHours += c.otHours;
+      agg.normalPay += c.normalPay;
+      agg.otPay += c.otPay;
+      agg.totalPay += c.totalPay;
+      agg.totalHours += c.workHours;
+      agg.count++;
+      if (c.weekend) {
+        agg.otHoursWeekend += c.otHours;
+        agg.otPayWeekend += c.otPay;
+      } else {
+        agg.otHoursWeekday += c.otHours;
+        agg.otPayWeekday += c.otPay;
+      }
+    });
+    return agg;
+  }
+
+  /* ============================================================
+   * DOM refs
+   * ========================================================== */
+  var $ = function (id) { return document.getElementById(id); };
+
+  var els = {
+    headerTitle: $("headerTitle"),
+    themeToggleBtn: $("themeToggleBtn"),
+    tabbar: $("tabbar"),
+    views: {
+      entry: $("view-entry"),
+      summary: $("view-summary"),
+      settings: $("view-settings")
+    },
+    entryForm: $("entryForm"),
+    entryFormTitle: $("entryFormTitle"),
+    fDate: $("f-date"),
+    dateTrigger: $("dateTrigger"),
+    dateTriggerText: $("dateTriggerText"),
+    weekendNotice: $("weekendNotice"),
+    fTimeIn: $("f-timein"),
+    fTimeOut: $("f-timeout"),
+    fOtRate: $("f-otrate"),
+    fOtCustomWrap: $("f-otcustom-wrap"),
+    fOtCustom: $("f-otcustom"),
+    fNote: $("f-note"),
+    entryPreview: $("entryPreview"),
+    cancelEditBtn: $("cancelEditBtn"),
+    saveEntryBtn: $("saveEntryBtn"),
+    entryList: $("entryList"),
+    entryCount: $("entryCount"),
+
+    summaryModeTabs: $("summaryModeTabs"),
+    periodPrev: $("periodPrev"),
+    periodNext: $("periodNext"),
+    periodLabel: $("periodLabel"),
+    summaryRecorderLine: $("summaryRecorderLine"),
+    statNormalHours: $("statNormalHours"),
+    statNormalPay: $("statNormalPay"),
+    statOtHours: $("statOtHours"),
+    statOtPay: $("statOtPay"),
+    statTotalPay: $("statTotalPay"),
+    statTotalHours: $("statTotalHours"),
+    compareTotalPay: $("compareTotalPay"),
+    compareOtHours: $("compareOtHours"),
+    dayListTitle: $("dayListTitle"),
+    summaryDays: $("summaryDays"),
+    chartTitle: $("chartTitle"),
+    trendChart: $("trendChart"),
+    trendTooltip: $("trendTooltip"),
+    otWeekdayVal: $("otWeekdayVal"),
+    otWeekendVal: $("otWeekendVal"),
+    salaryBreakdownCard: $("salaryBreakdownCard"),
+    sbSalary: $("sbSalary"),
+    sbOtPay: $("sbOtPay"),
+    sbTotal: $("sbTotal"),
+
+    sRecorderName: $("s-recordername"),
+    sDefaultTimeIn: $("s-defaulttimein"),
+    sDefaultTimeOut: $("s-defaulttimeout"),
+    sLockTimeIn: $("s-locktimein"),
+    sLockTimeOut: $("s-locktimeout"),
+    lockTimeInRow: $("lockTimeInRow"),
+    lockTimeOutRow: $("lockTimeOutRow"),
+    currencyTrigger: $("currencyTrigger"),
+    currencyTriggerFlag: $("currencyTriggerFlag"),
+    currencyTriggerLabel: $("currencyTriggerLabel"),
+    currencyOverlay: $("currencyOverlay"),
+    currencyList: $("currencyList"),
+    currencyClose: $("currencyClose"),
+    hourlyRateLabel: $("hourlyRateLabel"),
+    monthlySalaryLabel: $("monthlySalaryLabel"),
+    sHourlyRate: $("s-hourlyrate"),
+    sMonthlySalary: $("s-monthlysalary"),
+    sWorkStart: $("s-workstart"),
+    sHasLunchBreak: $("s-haslunchbreak"),
+    sLunchStart: $("s-lunchstart"),
+    sLunchEnd: $("s-lunchend"),
+    sNormalEnd: $("s-normalend"),
+    sHasMandatoryOt: $("s-hasmandatoryot"),
+    sMandatoryOtEnd: $("s-mandatoryotend"),
+    sHasEveningBreak: $("s-haseveningbreak"),
+    sEveningBreakStart: $("s-eveningbreakstart"),
+    sEveningBreakEnd: $("s-eveningbreakend"),
+    sOtMultiplier: $("s-otmultiplier"),
+    sWeekendOtMultiplier: $("s-weekendotmultiplier"),
+    saveIndicator: $("saveIndicator"),
+
+    exportBtn: $("exportBtn"),
+    importInput: $("importInput"),
+    clearBtn: $("clearBtn"),
+
+    authSignedOut: $("authSignedOut"),
+    authSignedIn: $("authSignedIn"),
+    googleLoginBtn: $("googleLoginBtn"),
+    logoutBtn: $("logoutBtn"),
+    userEmailDisplay: $("userEmailDisplay"),
+
+    toast: $("toast"),
+    confirmOverlay: $("confirmDialog"),
+    confirmMessage: $("confirmMessage"),
+    confirmOk: $("confirmOk"),
+    confirmCancel: $("confirmCancel"),
+    installBtn: $("installBtn"),
+
+    calendarOverlay: $("calendarOverlay"),
+    calMonthLabel: $("calMonthLabel"),
+    calPrev: $("calPrev"),
+    calNext: $("calNext"),
+    calendarGrid: $("calendarGrid"),
+    calToday: $("calToday"),
+    calClear: $("calClear"),
+    calClose: $("calClose")
+  };
+
+  /* ============================================================
+   * Toast / Confirm
+   * ========================================================== */
+  var toastTimer = null;
+  function showToast(msg) {
+    els.toast.textContent = msg;
+    els.toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { els.toast.classList.remove("show"); }, 2200);
+  }
+
+  function showConfirm(message) {
+    return new Promise(function (resolve) {
+      els.confirmMessage.textContent = message;
+      els.confirmOverlay.classList.remove("hidden");
+      function cleanup(result) {
+        els.confirmOverlay.classList.add("hidden");
+        els.confirmOk.removeEventListener("click", onOk);
+        els.confirmCancel.removeEventListener("click", onCancel);
+        resolve(result);
+      }
+      function onOk() { cleanup(true); }
+      function onCancel() { cleanup(false); }
+      els.confirmOk.addEventListener("click", onOk);
+      els.confirmCancel.addEventListener("click", onCancel);
+    });
+  }
+
+  /* ============================================================
+   * Theme (dark / light)
+   * ========================================================== */
+  var THEME_KEY = "ot-tracker-theme";
+
+  function systemPrefersDark() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+
+  function currentTheme() {
+    var attr = document.documentElement.getAttribute("data-theme");
+    return attr === "dark" || attr === "light" ? attr : (systemPrefersDark() ? "dark" : "light");
+  }
+
+  function updateThemeToggleIcon(theme) {
+    els.themeToggleBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+  }
+
+  function updateMetaThemeColor(theme) {
+    var metaThemeColor = document.querySelector('meta[name="theme-color"]');
+    if (metaThemeColor) metaThemeColor.setAttribute("content", theme === "dark" ? "#0d0d0d" : "#2a78d6");
+  }
+
+  function applyTheme(theme) {
+    document.documentElement.setAttribute("data-theme", theme);
+    try { localStorage.setItem(THEME_KEY, theme); } catch (e) {}
+    updateThemeToggleIcon(theme);
+    updateMetaThemeColor(theme);
+  }
+
+  els.themeToggleBtn.addEventListener("click", function () {
+    applyTheme(currentTheme() === "dark" ? "light" : "dark");
+  });
+
+  updateThemeToggleIcon(currentTheme());
+  updateMetaThemeColor(currentTheme());
+
+  /* ============================================================
+   * Header title / recorder name
+   * ========================================================== */
+  function updateHeaderTitle() {
+    var name = (state.settings.recorderName || "").trim();
+    els.headerTitle.textContent = name ? "OT Tracker — " + name : "OT Tracker";
+  }
+
+  /* ============================================================
+   * Tab navigation
+   * ========================================================== */
+  els.tabbar.addEventListener("click", function (e) {
+    var btn = e.target.closest(".tabbar__btn");
+    if (!btn) return;
+    var view = btn.dataset.view;
+    Object.keys(els.views).forEach(function (k) {
+      els.views[k].classList.toggle("hidden", k !== view);
+    });
+    Array.prototype.forEach.call(els.tabbar.children, function (b) {
+      b.classList.toggle("is-active", b === btn);
+    });
+    window.scrollTo(0, 0);
+    if (view === "summary") renderSummary();
+  });
+
+  /* ============================================================
+   * Entry form
+   * ========================================================== */
+  var editingId = null;
+
+  // Entry-form autofill values, sourced from the user's own "เวลาเข้า-ออกงานปกติ"
+  // settings - blank/unlocked unless the user has both filled in a value AND
+  // switched its lock on (see updateLockToggleAvailability).
+  function lockedTimeIn() {
+    var s = state.settings;
+    return (s.lockTimeIn && s.defaultTimeIn) ? s.defaultTimeIn : "";
+  }
+  function lockedTimeOutWeekday() {
+    var s = state.settings;
+    return (s.lockTimeOut && s.defaultTimeOut) ? s.defaultTimeOut : "";
+  }
+
+  // Weekend clock-out is never predictable, so it's always left blank there
+  // regardless of the lock - but only touches the field when it still looks
+  // like an untouched default (blank, or the locked weekday value) so it
+  // never clobbers something the user typed.
+  function applyWeekendTimeDefault() {
+    var weekend = isWeekendDate(els.fDate.value);
+    var weekdayDefault = lockedTimeOutWeekday();
+    if (weekend && els.fTimeOut.value === weekdayDefault) {
+      els.fTimeOut.value = "";
+    } else if (!weekend && els.fTimeOut.value === "") {
+      els.fTimeOut.value = weekdayDefault;
+    }
+  }
+
+  function resetForm() {
+    editingId = null;
+    els.entryForm.reset();
+    els.fDate.value = toISODate(new Date());
+    els.fTimeIn.value = lockedTimeIn();
+    els.fTimeOut.value = lockedTimeOutWeekday();
+    applyWeekendTimeDefault();
+    els.fOtRate.value = "default";
+    els.fOtCustomWrap.classList.add("hidden");
+    els.entryFormTitle.textContent = "บันทึกเวลาทำงาน";
+    els.saveEntryBtn.textContent = "บันทึก";
+    els.cancelEditBtn.classList.add("hidden");
+    updatePreview();
+  }
+
+  function fillFormFromEntry(entry) {
+    editingId = entry.id;
+    els.fDate.value = entry.date;
+    els.fTimeIn.value = entry.timeIn;
+    els.fTimeOut.value = entry.timeOut;
+    els.fNote.value = entry.note || "";
+    if (entry.otMultiplier === null || entry.otMultiplier === undefined) {
+      els.fOtRate.value = "default";
+      els.fOtCustomWrap.classList.add("hidden");
+    } else if ([1.5, 2, 3].indexOf(entry.otMultiplier) !== -1) {
+      els.fOtRate.value = String(entry.otMultiplier);
+      els.fOtCustomWrap.classList.add("hidden");
+    } else {
+      els.fOtRate.value = "custom";
+      els.fOtCustom.value = entry.otMultiplier;
+      els.fOtCustomWrap.classList.remove("hidden");
+    }
+    els.entryFormTitle.textContent = "แก้ไขรายการ";
+    els.saveEntryBtn.textContent = "บันทึกการแก้ไข";
+    els.cancelEditBtn.classList.remove("hidden");
+    updatePreview();
+    els.entryForm.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function currentFormOtMultiplier() {
+    var v = els.fOtRate.value;
+    if (v === "default") return null;
+    if (v === "custom") {
+      var c = Number(els.fOtCustom.value);
+      return isNaN(c) ? null : c;
+    }
+    return Number(v);
+  }
+
+  function draftEntryFromForm() {
+    return {
+      date: els.fDate.value,
+      timeIn: els.fTimeIn.value,
+      timeOut: els.fTimeOut.value,
+      otMultiplier: currentFormOtMultiplier(),
+      note: els.fNote.value.trim()
+    };
+  }
+
+  function updateWeekendNotice() {
+    els.weekendNotice.classList.toggle("hidden", !isWeekendDate(els.fDate.value));
+  }
+
+  function updateDateTriggerText() {
+    var v = els.fDate.value;
+    els.dateTriggerText.textContent = v ? dfFull.format(fromISODate(v)) : "เลือกวันที่";
+    els.dateTrigger.classList.toggle("is-empty", !v);
+  }
+
+  function updatePreview() {
+    updateWeekendNotice();
+    updateDateTriggerText();
+    var draft = draftEntryFromForm();
+    if (!draft.timeIn || !draft.timeOut) {
+      els.entryPreview.innerHTML = "กรอกเวลาเข้า-ออกงานเพื่อดูผลคำนวณ";
+      return;
+    }
+    var c = computeEntry(draft, state.settings);
+    if (!c) {
+      els.entryPreview.innerHTML = '<span class="preview__error">ข้อมูลเวลาไม่ถูกต้อง</span>';
+      return;
+    }
+    var html = "";
+    if (c.overnight) html += "🌙 กะข้ามคืน (คำนวณเลยเที่ยงคืน)<br/>";
+    html += "ชั่วโมงทำงานปกติ <strong>" + fmtHours(c.normalHours) + " ชม.</strong> = " + fmtMoney(c.normalPay) + "<br/>";
+    html += "ชั่วโมง OT รวม <strong class=\"preview__ot\">" + fmtHours(c.otHours) + " ชม.</strong>";
+    if (c.otHours > 0) html += " (x" + c.multiplier + ")";
+    html += " = <span class=\"preview__ot\">" + fmtMoney(c.otPay) + "</span><br/>";
+    html += "ยอดรวมทั้งหมด <span class=\"preview__total\">" + fmtMoney(c.totalPay) + "</span>";
+    els.entryPreview.innerHTML = html;
+  }
+
+  ["input", "change"].forEach(function (evt) {
+    els.entryForm.addEventListener(evt, function (e) {
+      if (e.target.id === "f-otrate") {
+        els.fOtCustomWrap.classList.toggle("hidden", els.fOtRate.value !== "custom");
+      }
+      if (e.target.id === "f-date" && editingId === null) {
+        applyWeekendTimeDefault();
+      }
+      updatePreview();
+    });
+  });
+
+  els.entryForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var draft = draftEntryFromForm();
+    if (!draft.date || !draft.timeIn || !draft.timeOut) {
+      showToast("กรุณากรอกข้อมูลให้ครบ");
+      return;
+    }
+    if (!computeEntry(draft, state.settings)) {
+      showToast("เวลาไม่ถูกต้อง");
+      return;
+    }
+    if (editingId) {
+      var idx = state.entries.findIndex(function (x) { return x.id === editingId; });
+      if (idx !== -1) state.entries[idx] = Object.assign({ id: editingId }, draft);
+      showToast("แก้ไขรายการแล้ว ✓");
+    } else {
+      draft.id = uid();
+      state.entries.push(draft);
+      showToast("บันทึกแล้ว ✓");
+    }
+    saveState();
+    resetForm();
+    renderEntryList();
+  });
+
+  els.cancelEditBtn.addEventListener("click", resetForm);
+
+  /* ============================================================
+   * Custom calendar (replaces the native date input)
+   * ========================================================== */
+  var calendarViewDate = new Date();
+
+  function otHoursForDate(dateISO) {
+    var total = 0;
+    state.entries.forEach(function (e) {
+      if (e.date === dateISO) {
+        var c = computeEntry(e, state.settings);
+        if (c) total += c.otHours;
+      }
+    });
+    return total;
+  }
+
+  function fmtHoursShort(h) {
+    return String(Math.round(h * 10) / 10);
+  }
+
+  function renderCalendar() {
+    var year = calendarViewDate.getFullYear();
+    var month = calendarViewDate.getMonth();
+    els.calMonthLabel.textContent = dfMonthYear.format(calendarViewDate);
+
+    var firstOfMonth = new Date(year, month, 1);
+    var startWeekday = firstOfMonth.getDay(); // 0 Sun .. 6 Sat
+    var leadingBlanks = startWeekday === 0 ? 6 : startWeekday - 1; // Monday-first grid
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    var todayISO = toISODate(new Date());
+    var selectedISO = els.fDate.value;
+
+    var cells = "";
+    for (var i = 0; i < leadingBlanks; i++) {
+      cells += '<div class="calendar-day calendar-day--empty"></div>';
+    }
+    for (var day = 1; day <= daysInMonth; day++) {
+      var cellDate = new Date(year, month, day);
+      var iso = toISODate(cellDate);
+      var dow = cellDate.getDay();
+      var otHours = otHoursForDate(iso);
+      var classes = ["calendar-day"];
+      if (iso === selectedISO) classes.push("is-selected");
+      if (iso === todayISO) classes.push("is-today");
+      if (dow === 0) classes.push("is-sunday");
+      if (dow === 6) classes.push("is-saturday");
+      cells +=
+        '<button type="button" class="' + classes.join(" ") + '" data-date="' + iso + '">' +
+          '<span class="calendar-day__num">' + day + "</span>" +
+          (otHours > 0 ? '<span class="calendar-day__ot">' + fmtHoursShort(otHours) + "</span>" : "") +
+        "</button>";
+    }
+    els.calendarGrid.innerHTML = cells;
+  }
+
+  function setFDateValue(iso) {
+    els.fDate.value = iso;
+    els.fDate.dispatchEvent(new Event("input", { bubbles: true }));
+    els.fDate.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function openCalendar() {
+    var current = els.fDate.value ? fromISODate(els.fDate.value) : new Date();
+    calendarViewDate = new Date(current.getFullYear(), current.getMonth(), 1);
+    renderCalendar();
+    els.calendarOverlay.classList.remove("hidden");
+  }
+
+  function closeCalendar() {
+    els.calendarOverlay.classList.add("hidden");
+  }
+
+  function selectCalendarDate(iso) {
+    setFDateValue(iso);
+    closeCalendar();
+  }
+
+  els.dateTrigger.addEventListener("click", openCalendar);
+  els.calClose.addEventListener("click", closeCalendar);
+
+  els.calPrev.addEventListener("click", function () {
+    calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1);
+    renderCalendar();
+  });
+  els.calNext.addEventListener("click", function () {
+    calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1);
+    renderCalendar();
+  });
+  els.calToday.addEventListener("click", function () {
+    var t = new Date();
+    calendarViewDate = new Date(t.getFullYear(), t.getMonth(), 1);
+    selectCalendarDate(toISODate(t));
+  });
+  els.calClear.addEventListener("click", function () {
+    setFDateValue("");
+    closeCalendar();
+  });
+  els.calendarGrid.addEventListener("click", function (e) {
+    var btn = e.target.closest(".calendar-day:not(.calendar-day--empty)");
+    if (!btn) return;
+    selectCalendarDate(btn.dataset.date);
+  });
+
+  /* ============================================================
+   * Entry list
+   * ========================================================== */
+  function renderEntryList() {
+    var sorted = state.entries.slice().sort(function (a, b) {
+      if (a.date !== b.date) return a.date < b.date ? 1 : -1;
+      return (b.timeIn || "").localeCompare(a.timeIn || "");
+    });
+
+    els.entryCount.textContent = sorted.length ? sorted.length + " รายการ" : "";
+
+    if (!sorted.length) {
+      els.entryList.innerHTML = '<div class="empty-state">ยังไม่มีข้อมูล เริ่มบันทึกเวลาทำงานวันแรกของคุณได้เลย ✨</div>';
+      return;
+    }
+
+    els.entryList.innerHTML = sorted.map(function (entry) {
+      var c = computeEntry(entry, state.settings);
+      var dateLabel = dfFull.format(fromISODate(entry.date));
+      var noteHtml = entry.note ? '<div class="entry-item__note">📝 ' + escapeHtml(entry.note) + "</div>" : "";
+      var payLine = c ? fmtMoney(c.totalPay) : "-";
+      var hoursLine = c
+        ? ("ปกติ " + fmtHours(c.normalHours) + " ชม. (" + fmtMoney(c.normalPay) + ")" +
+           (c.otHours > 0 ? ' · <span class="ot-val">OT ' + fmtHours(c.otHours) + " ชม. (" + fmtMoney(c.otPay) + ")</span>" : ""))
+        : "ข้อมูลผิดพลาด";
+      return (
+        '<div class="entry-item" data-id="' + entry.id + '">' +
+          '<div class="entry-item__main">' +
+            '<div class="entry-item__date">' + dateLabel + "</div>" +
+            '<div class="entry-item__time">' + entry.timeIn + " - " + entry.timeOut + "</div>" +
+            noteHtml +
+          "</div>" +
+          '<div class="entry-item__hours"><b>' + payLine + "</b><br/>" + hoursLine + "</div>" +
+          '<div class="entry-item__actions">' +
+            '<button class="icon-btn" data-action="edit" aria-label="แก้ไข">✏️</button>' +
+            '<button class="icon-btn" data-action="delete" aria-label="ลบ">🗑️</button>' +
+          "</div>" +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  function escapeHtml(s) {
+    var div = document.createElement("div");
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
+  els.entryList.addEventListener("click", function (e) {
+    var btn = e.target.closest(".icon-btn");
+    if (!btn) return;
+    var item = e.target.closest(".entry-item");
+    var id = item.dataset.id;
+    var entry = state.entries.find(function (x) { return x.id === id; });
+    if (!entry) return;
+
+    if (btn.dataset.action === "edit") {
+      Array.prototype.forEach.call(els.tabbar.children, function (b) {
+        if (b.dataset.view === "entry") b.click();
+      });
+      fillFormFromEntry(entry);
+    } else if (btn.dataset.action === "delete") {
+      showConfirm("ลบรายการวันที่ " + dfShort.format(fromISODate(entry.date)) + " ใช่หรือไม่?").then(function (ok) {
+        if (!ok) return;
+        state.entries = state.entries.filter(function (x) { return x.id !== id; });
+        saveState();
+        renderEntryList();
+        showToast("ลบรายการแล้ว");
+        if (editingId === id) resetForm();
+      });
+    }
+  });
+
+  /* ============================================================
+   * Summary
+   * ========================================================== */
+  var summaryState = { mode: "month", anchor: new Date() };
+
+  els.summaryModeTabs.addEventListener("click", function (e) {
+    var btn = e.target.closest(".segmented__btn");
+    if (!btn) return;
+    summaryState.mode = btn.dataset.mode;
+    Array.prototype.forEach.call(els.summaryModeTabs.children, function (b) {
+      b.classList.toggle("is-active", b === btn);
+    });
+    renderSummary();
+  });
+
+  els.periodPrev.addEventListener("click", function () { shiftPeriod(-1); });
+  els.periodNext.addEventListener("click", function () { shiftPeriod(1); });
+
+  function shiftPeriod(dir) {
+    if (summaryState.mode === "year") {
+      summaryState.anchor = new Date(summaryState.anchor.getFullYear() + dir, summaryState.anchor.getMonth(), 1);
+    } else {
+      summaryState.anchor = addMonths(summaryState.anchor, dir);
+    }
+    renderSummary();
+  }
+
+  function getPeriodRange() {
+    var a = summaryState.anchor;
+    if (summaryState.mode === "year") {
+      return { start: new Date(a.getFullYear(), 0, 1), end: new Date(a.getFullYear(), 11, 31) };
+    }
+    var first = new Date(a.getFullYear(), a.getMonth(), 1);
+    var last = new Date(a.getFullYear(), a.getMonth() + 1, 0);
+    return { start: first, end: last };
+  }
+
+  function periodLabelText(range) {
+    return summaryState.mode === "year" ? dfYear.format(range.start) : dfMonthYear.format(range.start);
+  }
+
+  function entriesBetween(startISO, endISO) {
+    return state.entries.filter(function (e) { return e.date >= startISO && e.date <= endISO; });
+  }
+
+  function monthAgg(year, month) {
+    var first = new Date(year, month, 1);
+    var last = new Date(year, month + 1, 0);
+    return aggregate(entriesBetween(toISODate(first), toISODate(last)), state.settings);
+  }
+
+  function yearAgg(year) {
+    return aggregate(entriesBetween(toISODate(new Date(year, 0, 1)), toISODate(new Date(year, 11, 31))), state.settings);
+  }
+
+  // Renders a "↑ +25% จากเดือนก่อน" style comparison badge. Handles the
+  // no-prior-data case explicitly so a 0 -> N jump doesn't show as "+Infinity%".
+  function changeBadgeHtml(current, previous, suffixLabel) {
+    if (!previous) {
+      if (!current) return '<span class="badge-change badge-change--flat">— ไม่มีข้อมูล' + suffixLabel + "</span>";
+      return '<span class="badge-change badge-change--new">✨ ใหม่</span> ไม่มีข้อมูล' + suffixLabel;
+    }
+    var pct = Math.round(((current - previous) / previous) * 100);
+    var dir = pct > 0 ? "up" : (pct < 0 ? "down" : "flat");
+    var arrow = dir === "up" ? "↑" : (dir === "down" ? "↓" : "→");
+    var sign = pct > 0 ? "+" : "";
+    return '<span class="badge-change badge-change--' + dir + '">' + arrow + " " + sign + pct + "%</span> " + suffixLabel;
+  }
+
+  function fillStatTiles(agg) {
+    els.statNormalHours.textContent = fmtHours(agg.normalHours);
+    els.statNormalPay.textContent = fmtMoney(agg.normalPay);
+    els.statOtHours.textContent = fmtHours(agg.otHours);
+    els.statOtPay.textContent = fmtMoney(agg.otPay);
+    els.statTotalPay.textContent = fmtMoney(agg.totalPay);
+    els.statTotalHours.textContent = fmtHours(agg.totalHours) + " ชม.";
+    els.otWeekdayVal.textContent = fmtHours(agg.otHoursWeekday) + " ชม. · " + fmtMoney(agg.otPayWeekday);
+    els.otWeekendVal.textContent = fmtHours(agg.otHoursWeekend) + " ชม. · " + fmtMoney(agg.otPayWeekend);
+  }
+
+  function updateSummaryRecorderLine() {
+    var name = (state.settings.recorderName || "").trim();
+    els.summaryRecorderLine.textContent = name ? "บันทึกโดย " + name : "";
+  }
+
+  function renderSummary() {
+    if (summaryState.mode === "year") renderYearSummary();
+    else renderMonthSummary();
+  }
+
+  function renderMonthSummary() {
+    var a = summaryState.anchor;
+    var range = getPeriodRange();
+    els.periodLabel.textContent = periodLabelText(range);
+    updateSummaryRecorderLine();
+
+    var agg = monthAgg(a.getFullYear(), a.getMonth());
+    var prev = addMonths(a, -1);
+    var prevAgg = monthAgg(prev.getFullYear(), prev.getMonth());
+
+    fillStatTiles(agg);
+    els.compareTotalPay.innerHTML = changeBadgeHtml(agg.totalPay, prevAgg.totalPay, "จากเดือนก่อน");
+    els.compareOtHours.innerHTML = changeBadgeHtml(agg.otHours, prevAgg.otHours, "จากเดือนก่อน");
+
+    els.chartTitle.textContent = "แนวโน้ม OT ย้อนหลัง 6 เดือน";
+    els.dayListTitle.textContent = "รายวันในเดือนนี้";
+
+    renderSalaryBreakdown(agg, true);
+    renderSummaryDays(entriesBetween(toISODate(range.start), toISODate(range.end)));
+    renderTrendChart(computeMonthlyOtTrend(a));
+  }
+
+  function renderYearSummary() {
+    var year = summaryState.anchor.getFullYear();
+    var range = getPeriodRange();
+    els.periodLabel.textContent = periodLabelText(range);
+    updateSummaryRecorderLine();
+
+    var agg = yearAgg(year);
+    var prevAgg = yearAgg(year - 1);
+
+    fillStatTiles(agg);
+    els.compareTotalPay.innerHTML = changeBadgeHtml(agg.totalPay, prevAgg.totalPay, "จากปีก่อน");
+    els.compareOtHours.innerHTML = changeBadgeHtml(agg.otHours, prevAgg.otHours, "จากปีก่อน");
+
+    els.chartTitle.textContent = "OT รายเดือนของปีนี้";
+    els.dayListTitle.textContent = "สรุปรายเดือนในปีนี้";
+
+    renderSalaryBreakdown(agg, false);
+    renderSummaryMonths(year);
+    renderTrendChart(computeYearlyMonthlyBreakdown(year));
+  }
+
+  /* ============================================================
+   * OT bar chart — shared by the month view's 6-month trend and the
+   * year view's 12-month breakdown
+   * ========================================================== */
+  function otColorForHours(hours) {
+    if (hours >= 30) return "var(--status-critical)";
+    if (hours >= 10) return "var(--status-warning)";
+    return "var(--status-good)";
+  }
+
+  function computeMonthlyOtTrend(anchorDate) {
+    var months = [];
+    for (var i = 5; i >= 0; i--) {
+      var d = new Date(anchorDate.getFullYear(), anchorDate.getMonth() - i, 1);
+      var agg = monthAgg(d.getFullYear(), d.getMonth());
+      months.push({
+        label: dfMonthShort.format(d),
+        fullLabel: dfMonthYear.format(d),
+        isCurrent: i === 0,
+        otHours: agg.otHours,
+        otPay: agg.otPay
+      });
+    }
+    return months;
+  }
+
+  function computeYearlyMonthlyBreakdown(year) {
+    var now = new Date();
+    var months = [];
+    for (var m = 0; m < 12; m++) {
+      var d = new Date(year, m, 1);
+      var agg = monthAgg(year, m);
+      months.push({
+        label: dfMonthShort.format(d),
+        fullLabel: dfMonthYear.format(d),
+        isCurrent: year === now.getFullYear() && m === now.getMonth(),
+        otHours: agg.otHours,
+        otPay: agg.otPay
+      });
+    }
+    return months;
+  }
+
+  var lastTrendMonths = null;
+
+  function renderTrendChart(months) {
+    lastTrendMonths = months;
+    var scaleMax = Math.max.apply(null, months.map(function (m) { return m.otHours; }).concat([10]));
+
+    els.trendChart.innerHTML = months.map(function (m, idx) {
+      var pct = scaleMax ? Math.max((m.otHours / scaleMax) * 100, m.otHours > 0 ? 4 : 2) : 2;
+      var color = otColorForHours(m.otHours);
+      return (
+        '<div class="trend-col">' +
+          '<div class="trend-col__bar-wrap">' +
+            '<div class="trend-col__bar" data-idx="' + idx + '" tabindex="0" role="button" ' +
+              'aria-label="' + m.fullLabel + " OT " + fmtHours(m.otHours) + ' ชั่วโมง" ' +
+              'style="height:' + pct.toFixed(1) + '%; background:' + color + '; animation-delay:' + (idx * 45) + 'ms;"></div>' +
+          "</div>" +
+          '<div class="trend-col__label' + (m.isCurrent ? " is-current" : "") + '">' + m.label + "</div>" +
+        "</div>"
+      );
+    }).join("");
+
+    drawTrendLine();
+
+    function showDetail(idx) {
+      var m = months[idx];
+      Array.prototype.forEach.call(els.trendChart.querySelectorAll(".trend-col__bar"), function (b, i) {
+        b.classList.toggle("is-active", i === idx);
+      });
+      els.trendTooltip.innerHTML = "<strong>" + m.fullLabel + "</strong> — OT " +
+        fmtHours(m.otHours) + " ชม. · " + fmtMoney(m.otPay);
+    }
+
+    var bars = els.trendChart.querySelectorAll(".trend-col__bar");
+    Array.prototype.forEach.call(bars, function (bar) {
+      var idx = Number(bar.dataset.idx);
+      bar.addEventListener("mouseenter", function () { showDetail(idx); });
+      bar.addEventListener("focus", function () { showDetail(idx); });
+      bar.addEventListener("click", function () { showDetail(idx); });
+    });
+
+    // default: show the current month's figures (falling back to the last bar
+    // if none of them is "current", e.g. a past year with no matching month)
+    var defaultIdx = months.length - 1;
+    for (var di = 0; di < months.length; di++) {
+      if (months[di].isCurrent) { defaultIdx = di; break; }
+    }
+    showDetail(defaultIdx);
+  }
+
+  // Faint line tracing the top of each bar, so the overall direction reads
+  // at a glance. Drawn from measured pixel positions (not the bars' %
+  // heights) so it lines up exactly regardless of container width; the
+  // bars use clip-path (not height/transform) for their grow-in animation
+  // specifically so this measurement is never taken mid-animation.
+  function drawTrendLine() {
+    var old = els.trendChart.querySelector(".trend-line-svg");
+    if (old) old.remove();
+
+    var bars = els.trendChart.querySelectorAll(".trend-col__bar");
+    if (bars.length < 2) return;
+    var chartRect = els.trendChart.getBoundingClientRect();
+    if (!chartRect.width || !chartRect.height) return;
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var points = Array.prototype.map.call(bars, function (bar) {
+      var r = bar.getBoundingClientRect();
+      return (r.left + r.width / 2 - chartRect.left).toFixed(1) + "," + (r.top - chartRect.top).toFixed(1);
+    });
+
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "trend-line-svg");
+    svg.setAttribute("width", chartRect.width);
+    svg.setAttribute("height", chartRect.height);
+    var polyline = document.createElementNS(svgNS, "polyline");
+    polyline.setAttribute("class", "trend-line-path");
+    polyline.setAttribute("points", points.join(" "));
+    svg.appendChild(polyline);
+    els.trendChart.appendChild(svg);
+  }
+
+  var trendLineResizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(trendLineResizeTimer);
+    trendLineResizeTimer = setTimeout(function () {
+      if (lastTrendMonths && !els.views.summary.classList.contains("hidden")) drawTrendLine();
+    }, 150);
+  });
+
+  function renderSalaryBreakdown(agg, showCard) {
+    els.salaryBreakdownCard.classList.toggle("hidden", !showCard);
+    if (!showCard) return;
+
+    var salary = state.settings.monthlySalary || 0;
+    var otPay = agg.otPay;
+    var total = salary + otPay;
+
+    els.sbSalary.textContent = fmtMoney(salary);
+    els.sbOtPay.textContent = fmtMoney(otPay);
+    els.sbTotal.textContent = fmtMoney(total);
+  }
+
+  function summaryRowHtml(label, agg, maxHours) {
+    maxHours = maxHours || 1;
+    return (
+      '<div class="summary-day">' +
+        '<div class="summary-day__top">' +
+          '<span class="summary-day__date">' + label + "</span>" +
+          '<span class="summary-day__pay">' + fmtMoney(agg.totalPay) + "</span>" +
+        "</div>" +
+        '<div class="summary-day__bar">' +
+          '<div class="summary-day__bar-normal" style="width:' + ((agg.normalHours / maxHours) * 100).toFixed(1) + '%"></div>' +
+          (agg.otHours > 0 ? '<div class="summary-day__bar-ot" style="width:' + ((agg.otHours / maxHours) * 100).toFixed(1) + '%"></div>' : "") +
+        "</div>" +
+        '<div class="summary-day__meta">' +
+          "<span>ปกติ " + fmtHours(agg.normalHours) + " ชม.</span>" +
+          "<span>" + (agg.otHours > 0 ? "OT " + fmtHours(agg.otHours) + " ชม." : "") + "</span>" +
+        "</div>" +
+      "</div>"
+    );
+  }
+
+  function renderSummaryDays(entriesInRange) {
+    if (!entriesInRange.length) {
+      els.summaryDays.innerHTML = '<div class="empty-state">ไม่มีข้อมูลในช่วงนี้</div>';
+      return;
+    }
+
+    var byDate = {};
+    entriesInRange.forEach(function (e) {
+      (byDate[e.date] = byDate[e.date] || []).push(e);
+    });
+
+    var dates = Object.keys(byDate).sort(); // ascending
+    var dayAggs = dates.map(function (d) {
+      return { date: d, agg: aggregate(byDate[d], state.settings) };
+    });
+
+    var maxHours = Math.max.apply(null, dayAggs.map(function (x) { return x.agg.totalHours; }).concat([scheduleNormalHoursPerDay(state.settings) || 8]));
+
+    els.summaryDays.innerHTML = dayAggs.map(function (x) {
+      return summaryRowHtml(dfFull.format(fromISODate(x.date)), x.agg, maxHours);
+    }).join("");
+  }
+
+  function renderSummaryMonths(year) {
+    var monthsWithData = [];
+    for (var m = 0; m < 12; m++) {
+      var agg = monthAgg(year, m);
+      if (agg.count > 0) monthsWithData.push({ month: m, agg: agg });
+    }
+    if (!monthsWithData.length) {
+      els.summaryDays.innerHTML = '<div class="empty-state">ไม่มีข้อมูลในปีนี้</div>';
+      return;
+    }
+
+    var maxHours = Math.max.apply(null, monthsWithData.map(function (x) { return x.agg.totalHours; }).concat([1]));
+
+    els.summaryDays.innerHTML = monthsWithData.map(function (x) {
+      var label = dfMonthYear.format(new Date(year, x.month, 1));
+      return summaryRowHtml(label, x.agg, maxHours);
+    }).join("");
+  }
+
+  /* ============================================================
+   * Settings
+   * ========================================================== */
+  function loadSettingsToForm() {
+    var s = state.settings;
+    var cur = currentCurrency();
+    els.sRecorderName.value = s.recorderName || "";
+    els.sDefaultTimeIn.value = s.defaultTimeIn || "";
+    els.sDefaultTimeOut.value = s.defaultTimeOut || "";
+    els.sLockTimeIn.checked = !!s.lockTimeIn;
+    els.sLockTimeOut.checked = !!s.lockTimeOut;
+    updateLockToggleAvailability();
+    updateCurrencyTrigger();
+    els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
+    els.monthlySalaryLabel.textContent = "เงินเดือน (" + cur.symbol + " " + cur.label + ")";
+    setMoneyInputValue(els.sHourlyRate, s.hourlyRate);
+    setMoneyInputValue(els.sMonthlySalary, s.monthlySalary);
+    els.sWorkStart.value = s.workStart;
+    els.sHasLunchBreak.checked = !!s.hasLunchBreak;
+    els.sLunchStart.value = s.lunchStart;
+    els.sLunchEnd.value = s.lunchEnd;
+    els.sNormalEnd.value = s.normalEnd;
+    els.sHasMandatoryOt.checked = !!s.hasMandatoryOt;
+    els.sMandatoryOtEnd.value = s.mandatoryOtEnd;
+    els.sHasEveningBreak.checked = !!s.hasEveningBreak;
+    els.sEveningBreakStart.value = s.eveningBreakStart;
+    els.sEveningBreakEnd.value = s.eveningBreakEnd;
+    els.sOtMultiplier.value = s.otMultiplier;
+    els.sWeekendOtMultiplier.value = s.weekendOtMultiplier;
+    updatePresetButtons();
+    updateScheduleToggleAvailability();
+  }
+
+  // Dims and disables the time inputs for whichever schedule window is
+  // switched off, so it's visually clear they're not in effect right now
+  // (the underlying values are preserved in case the user re-enables it).
+  function updateScheduleToggleAvailability() {
+    var s = state.settings;
+    els.sLunchStart.disabled = els.sLunchEnd.disabled = !s.hasLunchBreak;
+    els.sMandatoryOtEnd.disabled = !s.hasMandatoryOt;
+    els.sEveningBreakStart.disabled = els.sEveningBreakEnd.disabled = !s.hasEveningBreak;
+  }
+
+  function updatePresetButtons() {
+    var vWeekday = String(state.settings.otMultiplier);
+    var vWeekend = String(state.settings.weekendOtMultiplier);
+    Array.prototype.forEach.call(document.querySelectorAll(".preset-btn"), function (b) {
+      var v = b.dataset.target === "weekend" ? vWeekend : vWeekday;
+      b.classList.toggle("is-active", b.dataset.preset === v);
+    });
+  }
+
+  // Currency picker: a native <select> can't render the flag SVGs inside its
+  // options, so this reuses the app's existing "trigger button opens an
+  // overlay" pattern (same as the date picker) instead.
+  function updateCurrencyTrigger() {
+    var code = state.settings.currency;
+    var options = els.currencyList.querySelectorAll(".currency-option");
+    var match = els.currencyList.querySelector('.currency-option[data-currency="' + code + '"]') || options[0];
+    els.currencyTriggerFlag.innerHTML = match.querySelector(".currency-flag").innerHTML;
+    els.currencyTriggerLabel.textContent = match.querySelector(".currency-option__label").textContent;
+    Array.prototype.forEach.call(options, function (b) {
+      b.classList.toggle("is-selected", b === match);
+    });
+  }
+
+  function openCurrencyPicker() {
+    updateCurrencyTrigger();
+    els.currencyOverlay.classList.remove("hidden");
+  }
+  function closeCurrencyPicker() {
+    els.currencyOverlay.classList.add("hidden");
+  }
+
+  els.currencyTrigger.addEventListener("click", openCurrencyPicker);
+  els.currencyClose.addEventListener("click", closeCurrencyPicker);
+  els.currencyOverlay.addEventListener("click", function (e) {
+    if (e.target === els.currencyOverlay) closeCurrencyPicker();
+  });
+
+  els.currencyList.addEventListener("click", function (e) {
+    var btn = e.target.closest(".currency-option");
+    if (!btn) return;
+    state.settings.currency = btn.dataset.currency;
+    persistSettings();
+    loadSettingsToForm();
+    renderEntryList();
+    renderSummary();
+    updatePreview();
+    closeCurrencyPicker();
+  });
+
+  els.sRecorderName.addEventListener("input", function () {
+    state.settings.recorderName = els.sRecorderName.value;
+    persistSettings();
+    updateHeaderTitle();
+    renderSummary();
+  });
+
+  // The lock toggles only make sense once there's a value to lock to, so
+  // they stay disabled (and force back off) whenever the matching default
+  // time field is empty.
+  function updateLockToggleAvailability() {
+    var hasIn = !!state.settings.defaultTimeIn;
+    var hasOut = !!state.settings.defaultTimeOut;
+    els.sLockTimeIn.disabled = !hasIn;
+    els.sLockTimeOut.disabled = !hasOut;
+    els.lockTimeInRow.classList.toggle("is-disabled", !hasIn);
+    els.lockTimeOutRow.classList.toggle("is-disabled", !hasOut);
+  }
+
+  els.sDefaultTimeIn.addEventListener("input", function () {
+    state.settings.defaultTimeIn = els.sDefaultTimeIn.value;
+    if (!state.settings.defaultTimeIn) {
+      state.settings.lockTimeIn = false;
+      els.sLockTimeIn.checked = false;
+    }
+    updateLockToggleAvailability();
+    persistSettings();
+  });
+
+  els.sDefaultTimeOut.addEventListener("input", function () {
+    state.settings.defaultTimeOut = els.sDefaultTimeOut.value;
+    if (!state.settings.defaultTimeOut) {
+      state.settings.lockTimeOut = false;
+      els.sLockTimeOut.checked = false;
+    }
+    updateLockToggleAvailability();
+    persistSettings();
+  });
+
+  els.sLockTimeIn.addEventListener("change", function () {
+    state.settings.lockTimeIn = els.sLockTimeIn.checked;
+    persistSettings();
+  });
+
+  els.sLockTimeOut.addEventListener("change", function () {
+    state.settings.lockTimeOut = els.sLockTimeOut.checked;
+    persistSettings();
+  });
+
+  [
+    [els.sHasLunchBreak, "hasLunchBreak"],
+    [els.sHasMandatoryOt, "hasMandatoryOt"],
+    [els.sHasEveningBreak, "hasEveningBreak"]
+  ].forEach(function (pair) {
+    var el = pair[0], key = pair[1];
+    el.addEventListener("change", function () {
+      state.settings[key] = el.checked;
+      updateScheduleToggleAvailability();
+      persistSettings();
+      renderEntryList();
+      renderSummary();
+      updatePreview();
+    });
+  });
+
+  document.querySelectorAll(".preset-btn").forEach(function (b) {
+    b.addEventListener("click", function () {
+      if (b.dataset.target === "weekend") {
+        els.sWeekendOtMultiplier.value = b.dataset.preset;
+        state.settings.weekendOtMultiplier = Number(b.dataset.preset);
+      } else {
+        els.sOtMultiplier.value = b.dataset.preset;
+        state.settings.otMultiplier = Number(b.dataset.preset);
+      }
+      persistSettings();
+      updatePresetButtons();
+      renderEntryList();
+      renderSummary();
+      updatePreview();
+    });
+  });
+
+  var settingsInputs = [
+    els.sHourlyRate, els.sMonthlySalary, els.sOtMultiplier, els.sWeekendOtMultiplier,
+    els.sWorkStart, els.sLunchStart, els.sLunchEnd, els.sNormalEnd,
+    els.sMandatoryOtEnd, els.sEveningBreakStart, els.sEveningBreakEnd
+  ];
+  settingsInputs.forEach(function (input) {
+    input.addEventListener("input", function () {
+      state.settings.hourlyRate = parseMoneyInput(els.sHourlyRate);
+      state.settings.monthlySalary = parseMoneyInput(els.sMonthlySalary);
+      state.settings.otMultiplier = Number(els.sOtMultiplier.value) || 1;
+      state.settings.weekendOtMultiplier = Number(els.sWeekendOtMultiplier.value) || 1;
+      state.settings.workStart = els.sWorkStart.value || DEFAULT_STATE.settings.workStart;
+      state.settings.lunchStart = els.sLunchStart.value || DEFAULT_STATE.settings.lunchStart;
+      state.settings.lunchEnd = els.sLunchEnd.value || DEFAULT_STATE.settings.lunchEnd;
+      state.settings.normalEnd = els.sNormalEnd.value || DEFAULT_STATE.settings.normalEnd;
+      state.settings.mandatoryOtEnd = els.sMandatoryOtEnd.value || DEFAULT_STATE.settings.mandatoryOtEnd;
+      state.settings.eveningBreakStart = els.sEveningBreakStart.value || DEFAULT_STATE.settings.eveningBreakStart;
+      state.settings.eveningBreakEnd = els.sEveningBreakEnd.value || DEFAULT_STATE.settings.eveningBreakEnd;
+      updatePresetButtons();
+      persistSettings();
+      renderEntryList();
+      renderSummary();
+      updatePreview();
+    });
+  });
+
+  var saveIndicatorTimer = null;
+  function persistSettings() {
+    saveState();
+    els.saveIndicator.classList.add("show");
+    clearTimeout(saveIndicatorTimer);
+    saveIndicatorTimer = setTimeout(function () { els.saveIndicator.classList.remove("show"); }, 1200);
+  }
+
+  /* ============================================================
+   * Data management
+   * ========================================================== */
+  els.exportBtn.addEventListener("click", function () {
+    var blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    var stamp = toISODate(new Date());
+    a.href = url;
+    a.download = "ot-tracker-backup-" + stamp + ".json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast("สำรองข้อมูลแล้ว");
+  });
+
+  els.importInput.addEventListener("change", function () {
+    var file = els.importInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      try {
+        var parsed = JSON.parse(reader.result);
+        if (!parsed || !Array.isArray(parsed.entries)) throw new Error("รูปแบบไฟล์ไม่ถูกต้อง");
+        showConfirm("นำเข้าข้อมูลจะแทนที่ข้อมูลปัจจุบันทั้งหมด ดำเนินการต่อหรือไม่?").then(function (ok) {
+          if (!ok) { els.importInput.value = ""; return; }
+          state.settings = Object.assign(clone(DEFAULT_STATE.settings), parsed.settings || {});
+          state.entries = parsed.entries;
+          saveState();
+          loadSettingsToForm();
+          updateHeaderTitle();
+          renderEntryList();
+          renderSummary();
+          showToast("นำเข้าข้อมูลสำเร็จ ✓");
+          els.importInput.value = "";
+        });
+      } catch (err) {
+        showToast("ไม่สามารถอ่านไฟล์นี้ได้");
+        els.importInput.value = "";
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  els.clearBtn.addEventListener("click", function () {
+    showConfirm("ล้างข้อมูลทั้งหมด (รายการเวลาทำงานทุกรายการ) จะไม่สามารถกู้คืนได้ ยืนยันหรือไม่?").then(function (ok) {
+      if (!ok) return;
+      state = clone(DEFAULT_STATE);
+      saveState();
+      loadSettingsToForm();
+      updateHeaderTitle();
+      resetForm();
+      renderEntryList();
+      renderSummary();
+      showToast("ล้างข้อมูลแล้ว");
+    });
+  });
+
+  /* ============================================================
+   * PWA: service worker + install prompt
+   * ========================================================== */
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("service-worker.js").catch(function (err) {
+        console.warn("ลงทะเบียน Service Worker ไม่สำเร็จ", err);
+      });
+    });
+
+    // A tab left open across a deploy keeps running the JS it already
+    // loaded even after a new service worker installs in the background -
+    // reload once the new one actually takes control so an open desktop
+    // tab can't get stuck running a stale (potentially buggy) version.
+    var swRefreshing = false;
+    navigator.serviceWorker.addEventListener("controllerchange", function () {
+      if (swRefreshing) return;
+      swRefreshing = true;
+      window.location.reload();
+    });
+  }
+
+  var deferredInstallPrompt = null;
+  window.addEventListener("beforeinstallprompt", function (e) {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    els.installBtn.classList.remove("hidden");
+  });
+  els.installBtn.addEventListener("click", function () {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.finally(function () {
+      deferredInstallPrompt = null;
+      els.installBtn.classList.add("hidden");
+    });
+  });
+  window.addEventListener("appinstalled", function () {
+    els.installBtn.classList.add("hidden");
+  });
+
+  /* ============================================================
+   * Auth (Supabase Google login) + cloud sync — same Supabase project
+   * as todo-practice. localStorage stays the source of truth for
+   * offline use; when signed in, every saveState() also mirrors the
+   * full state up to ot_settings/ot_entries (see hook in saveState()
+   * above). window.supabase may be missing if the CDN script failed
+   * to load (e.g. first launch while offline) - guarded so the rest
+   * of the app still boots normally.
+   * ========================================================== */
+  var SUPABASE_URL = "https://tnbxahwxiocgmabrajpz.supabase.co";
+  var SUPABASE_KEY = "sb_publishable_u8s6AuflgTbsn8Or1TJxnw_GezZH5kS";
+
+  var supabaseClient = (window.supabase && window.supabase.createClient)
+    ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+    : null;
+
+  // Signed-in user's id once cloud sync has kicked in for this session,
+  // null while signed out. Doubles as the "have we already run the
+  // initial sync for this login" guard, since onAuthStateChange also
+  // re-fires (with the same user id) on token refresh etc.
+  var currentUserId = null;
+
+  function renderAuthState(session) {
+    var signedIn = !!session;
+    els.authSignedOut.classList.toggle("hidden", signedIn);
+    els.authSignedIn.classList.toggle("hidden", !signedIn);
+    els.userEmailDisplay.textContent = signedIn ? session.user.email : "";
+  }
+
+  function entryToRow(entry, userId) {
+    return {
+      id: entry.id,
+      user_id: userId,
+      date: entry.date,
+      time_in: entry.timeIn,
+      time_out: entry.timeOut,
+      ot_multiplier: (entry.otMultiplier === null || entry.otMultiplier === undefined) ? null : entry.otMultiplier,
+      note: entry.note || ""
+    };
+  }
+
+  function rowToEntry(row) {
+    return {
+      id: row.id,
+      date: row.date,
+      timeIn: row.time_in,
+      timeOut: row.time_out,
+      otMultiplier: row.ot_multiplier,
+      note: row.note || ""
+    };
+  }
+
+  // Mirrors the full local state up to Supabase: upserts the single
+  // settings row, then replaces all of this user's ot_entries rows
+  // wholesale (delete + reinsert) rather than diffing them - simple and
+  // correct for the data sizes this app deals with. Fire-and-forget: never
+  // awaited by callers, failures (e.g. offline while signed in) only log,
+  // so a sync hiccup never blocks or breaks local editing.
+  function pushStateToCloud() {
+    if (!supabaseClient || !currentUserId) return;
+    var userId = currentUserId;
+    supabaseClient
+      .from("ot_settings")
+      .upsert({ user_id: userId, data: state.settings, updated_at: new Date().toISOString() })
+      .then(function (res) {
+        if (res.error) throw res.error;
+        return supabaseClient.from("ot_entries").delete().eq("user_id", userId);
+      })
+      .then(function (res) {
+        if (res.error) throw res.error;
+        if (!state.entries.length) return null;
+        return supabaseClient.from("ot_entries").insert(state.entries.map(function (e) { return entryToRow(e, userId); }));
+      })
+      .then(function (res) {
+        if (res && res.error) throw res.error;
+      })
+      .catch(function (err) {
+        console.error("ซิงก์ข้อมูลขึ้น cloud ไม่สำเร็จ", err);
+      });
+  }
+
+  // Replaces local state with what's already in the cloud - used when a
+  // second device/browser logs in and the cloud already has data. Writes
+  // straight to localStorage (not saveState()) so this doesn't immediately
+  // re-trigger a redundant push of the very data just pulled down.
+  function pullStateFromCloud(userId) {
+    return Promise.all([
+      supabaseClient.from("ot_settings").select("data").eq("user_id", userId).maybeSingle(),
+      supabaseClient.from("ot_entries").select("*").eq("user_id", userId)
+    ]).then(function (results) {
+      var settingsRes = results[0], entriesRes = results[1];
+      if (settingsRes.error) throw settingsRes.error;
+      if (entriesRes.error) throw entriesRes.error;
+      if (settingsRes.data) {
+        state.settings = Object.assign(clone(DEFAULT_STATE.settings), settingsRes.data.data || {});
+      }
+      state.entries = (entriesRes.data || []).map(rowToEntry);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      loadSettingsToForm();
+      updateHeaderTitle();
+      resetForm();
+      renderEntryList();
+      renderSummary();
+    });
+  }
+
+  // First time this user id is seen: if the cloud has nothing for them
+  // yet, seed it from whatever's already in localStorage on this device;
+  // otherwise the cloud is treated as authoritative and overwrites local.
+  function initialSyncOnLogin(userId) {
+    Promise.all([
+      supabaseClient.from("ot_settings").select("user_id").eq("user_id", userId).maybeSingle(),
+      supabaseClient.from("ot_entries").select("id", { count: "exact", head: true }).eq("user_id", userId)
+    ]).then(function (results) {
+      var settingsRes = results[0], entriesCountRes = results[1];
+      if (settingsRes.error) throw settingsRes.error;
+      if (entriesCountRes.error) throw entriesCountRes.error;
+      var cloudEmpty = !settingsRes.data && !entriesCountRes.count;
+      if (cloudEmpty) {
+        pushStateToCloud();
+        showToast("อัปโหลดข้อมูลขึ้น cloud แล้ว ✓");
+        return null;
+      }
+      return pullStateFromCloud(userId).then(function () {
+        showToast("ดึงข้อมูลจาก cloud แล้ว ✓");
+      });
+    }).catch(function (err) {
+      console.error("ซิงก์ข้อมูลเริ่มต้นไม่สำเร็จ", err);
+      showToast("ซิงก์ข้อมูลกับ cloud ไม่สำเร็จ");
+    });
+  }
+
+  function handleAuthChange(session) {
+    renderAuthState(session);
+    var userId = session ? session.user.id : null;
+    if (userId && userId !== currentUserId) {
+      currentUserId = userId;
+      initialSyncOnLogin(userId);
+    } else if (!userId) {
+      currentUserId = null;
+    }
+  }
+
+  if (supabaseClient) {
+    els.googleLoginBtn.addEventListener("click", function () {
+      supabaseClient.auth.signInWithOAuth({
+        provider: "google",
+        options: { redirectTo: window.location.origin + window.location.pathname }
+      });
+    });
+
+    els.logoutBtn.addEventListener("click", function () {
+      supabaseClient.auth.signOut();
+    });
+
+    supabaseClient.auth.getSession().then(function (result) {
+      handleAuthChange(result.data.session);
+    });
+
+    supabaseClient.auth.onAuthStateChange(function (_event, session) {
+      handleAuthChange(session);
+    });
+  } else {
+    els.googleLoginBtn.disabled = true;
+    els.googleLoginBtn.textContent = "ต้องเชื่อมต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ";
+  }
+
+  /* ============================================================
+   * Init
+   * ========================================================== */
+  initMoneyInputs(document);
+  updateHeaderTitle();
+  resetForm();
+  renderEntryList();
+  loadSettingsToForm();
+  renderSummary();
+})();
