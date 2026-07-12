@@ -1,9 +1,11 @@
-var CACHE_NAME = "ot-tracker-cache-v6";
+var CACHE_NAME = "ot-tracker-cache-v8";
 var APP_SHELL = [
   "./",
   "./index.html",
   "./css/style.css",
   "./js/app.js",
+  "./js/static-holidays.js",
+  "./js/holiday-names-th.js",
   "./manifest.json",
   "./icons/icon-192.png",
   "./icons/icon-512.png",
