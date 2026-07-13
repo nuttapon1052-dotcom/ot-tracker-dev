@@ -36,9 +36,14 @@
       defaultTimeOut: "",
       lockTimeIn: false,
       lockTimeOut: false,
-      // end-of-work reminder toggle - the actual browser permission is
-      // requested only when the user turns this on (its change handler,
-      // below), never automatically on load.
+      // late clock-out reminder toggle (server-side Web Push) - persisted
+      // here only; the send-push-reminders Edge Function reads
+      // ot_settings.data.notifyEnabled directly and does all of the actual
+      // "15 min after normalEnd, no time_out yet" scheduling/delivery via
+      // pg_cron (see supabase/functions/send-push-reminders and
+      // supabase/migrations/20260712000000_push_reminders.sql). Requires an
+      // active Push subscription to receive anything (see sNotifyLateOut's
+      // change handler below).
       notifyEnabled: false
     },
     entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
@@ -566,12 +571,10 @@
     sLockTimeOut: $("s-locktimeout"),
     lockTimeInRow: $("lockTimeInRow"),
     lockTimeOutRow: $("lockTimeOutRow"),
-    sNotifyEnabled: $("s-notifyenabled"),
-    notifyRow: $("notifyRow"),
-    notifyHint: $("notifyHint"),
     sPushEnabled: $("s-pushenabled"),
     pushRow: $("pushRow"),
     pushHint: $("pushHint"),
+    sNotifyLateOut: $("s-notifylateout"),
     currencyTrigger: $("currencyTrigger"),
     currencyTriggerFlag: $("currencyTriggerFlag"),
     currencyTriggerLabel: $("currencyTriggerLabel"),
@@ -1174,8 +1177,8 @@
    * Work notes (บันทึกเหตุการณ์ล่วงหน้า) — entirely separate from the OT
    * entries above: own state array, own form, own list, synced to its own
    * Supabase table (work_notes). Only touches the shared calendar-box (via
-   * calendarTarget, above) and the shared notifyEnabled toggle (see
-   * checkUpcomingNoteNotifications near the end-of-work reminder below).
+   * calendarTarget, above) and browser Notification permission (see
+   * checkUpcomingNoteNotifications near the Push section below).
    * ========================================================== */
   var editingNoteId = null;
 
@@ -1771,7 +1774,6 @@
     els.sLockTimeIn.checked = !!s.lockTimeIn;
     els.sLockTimeOut.checked = !!s.lockTimeOut;
     updateLockToggleAvailability();
-    updateNotifyToggleAvailability();
     updateCurrencyTrigger();
     els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
     els.monthlySalaryLabel.textContent = "เงินเดือน (" + cur.symbol + " " + cur.label + ")";
@@ -1784,6 +1786,7 @@
     els.sLunchStart.value = s.lunchStart;
     els.sLunchEnd.value = s.lunchEnd;
     els.sNormalEnd.value = s.normalEnd;
+    els.sNotifyLateOut.checked = !!s.notifyEnabled;
     els.sHasMandatoryOt.checked = !!s.hasMandatoryOt;
     els.sMandatoryOtEnd.value = s.mandatoryOtEnd;
     els.sHasEveningBreak.checked = !!s.hasEveningBreak;
@@ -1890,9 +1893,7 @@
       els.sLockTimeOut.checked = false;
     }
     updateLockToggleAvailability();
-    updateNotifyToggleAvailability();
     persistSettings();
-    checkEndOfWorkNotification();
   });
 
   els.sLockTimeIn.addEventListener("change", function () {
@@ -1905,133 +1906,25 @@
     persistSettings();
   });
 
-  /* ------------ End-of-work reminder (Web Notification API) ------------
-   * Foreground-only by design: a plain setInterval poll while this tab is
-   * open, no Service Worker / Push API involved. Permission is requested
-   * only from the toggle's own change handler below - never automatically
-   * on load - so the browser prompt only ever appears as a direct result
-   * of the user opting in.
-   */
-  var NOTIFY_LAST_DATE_KEY = "ot-tracker-last-notify-date-v1";
-  var NOTIFY_CHECK_INTERVAL_MS = 30000;
-
-  // Per-device "already notified today" marker - deliberately kept out of
-  // state.settings (and so out of the Supabase sync payload): it's
-  // throwaway scheduling state, not a preference worth syncing across
-  // devices.
-  function getLastNotifiedDate() {
-    try { return localStorage.getItem(NOTIFY_LAST_DATE_KEY); } catch (e) { return null; }
-  }
-  function setLastNotifiedDate(iso) {
-    try { localStorage.setItem(NOTIFY_LAST_DATE_KEY, iso); } catch (e) {}
-  }
-
+  // Shared by the push toggle below and the upcoming work-note reminder.
   function notificationSupport() {
     if (typeof Notification === "undefined") return "unsupported";
     return Notification.permission; // "granted" | "denied" | "default"
   }
 
-  // Keeps the toggle's enabled/disabled state and hint text in sync with
-  // both browser support/permission and whether there's a reference time
-  // to notify against yet. If notifications were on but permission gets
-  // revoked (or the reference time gets cleared) out from under it, force
-  // the setting back off so the UI never claims to be notifying when it
-  // can't - this is the only case that persists a change here.
-  function updateNotifyToggleAvailability() {
-    var support = notificationSupport();
-    var hasTimeOut = !!state.settings.defaultTimeOut;
-    var disabled = support === "unsupported" || support === "denied" || !hasTimeOut;
-
-    if (disabled && state.settings.notifyEnabled) {
-      state.settings.notifyEnabled = false;
-      persistSettings();
-    }
-
-    els.sNotifyEnabled.disabled = disabled;
-    els.notifyRow.classList.toggle("is-disabled", disabled);
-    els.sNotifyEnabled.checked = !disabled && !!state.settings.notifyEnabled;
-
-    if (support === "unsupported") {
-      els.notifyHint.textContent = "เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน";
-    } else if (support === "denied") {
-      els.notifyHint.textContent = "การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน";
-    } else if (!hasTimeOut) {
-      els.notifyHint.textContent = "กรอก \"เวลาเลิกงานปกติ\" ด้านบนก่อน จึงจะเปิดใช้ได้ — เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น";
-    } else {
-      els.notifyHint.textContent = "เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น";
-    }
-  }
-
-  // Fires the reminder at most once per calendar day, and never at all if
-  // that day's entry is already saved (checked at call time, so saving
-  // right up to the last second before the target time still cancels it).
-  function checkEndOfWorkNotification() {
-    if (!state.settings.notifyEnabled) return;
-    if (notificationSupport() !== "granted") return;
-    var timeOut = state.settings.defaultTimeOut;
-    if (!timeOut) return;
-
-    var now = new Date();
-    var todayISO = toISODate(now);
-    if (getLastNotifiedDate() === todayISO) return;
-
-    var hasEntryToday = state.entries.some(function (e) { return e.date === todayISO; });
-    if (hasEntryToday) {
-      setLastNotifiedDate(todayISO);
-      return;
-    }
-
-    var nowHM = pad2(now.getHours()) + ":" + pad2(now.getMinutes());
-    if (nowHM < timeOut) return;
-
-    try {
-      new Notification("OT Tracker", { body: "⏰ ถึงเวลาเลิกงานแล้ว อย่าลืมบันทึกเวลาทำงานวันนี้" });
-    } catch (e) {
-      console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
-    }
-    setLastNotifiedDate(todayISO);
-  }
-
-  els.sNotifyEnabled.addEventListener("change", function () {
-    if (!els.sNotifyEnabled.checked) {
-      state.settings.notifyEnabled = false;
-      persistSettings();
-      updateNotifyToggleAvailability();
-      return;
-    }
-    if (typeof Notification === "undefined") {
-      els.sNotifyEnabled.checked = false;
-      updateNotifyToggleAvailability();
-      return;
-    }
-    // Only ever prompted here, as a direct result of the user flipping
-    // this toggle on - if permission was already granted/denied in a
-    // previous session, the browser resolves this immediately with no
-    // prompt.
-    Notification.requestPermission().then(function (permission) {
-      state.settings.notifyEnabled = (permission === "granted");
-      persistSettings();
-      updateNotifyToggleAvailability();
-      checkEndOfWorkNotification();
-      checkUpcomingNoteNotifications();
-    });
-  });
-
-  setInterval(checkEndOfWorkNotification, NOTIFY_CHECK_INTERVAL_MS);
-
   /* ------------ Upcoming work-note reminder (Web Notification API) ------------
-   * Rides the same notifyEnabled toggle/permission as the end-of-work
-   * reminder above (spec: no separate toggle) but checks only once per app
-   * open, not on the 30s poll - it's date-based (does a note start
-   * tomorrow?), not time-of-day-based, so nothing changes between polls
-   * within a single session.
+   * No separate toggle - only gated on browser Notification permission
+   * (independent of notifyEnabled, which now just controls the server-side
+   * late-clock-out push reminder). Checks only once per app open, not on a
+   * poll - it's date-based (does a note start tomorrow?), not
+   * time-of-day-based, so nothing changes between checks within a single
+   * session.
    */
   var NOTE_NOTIFY_KEY = "ot-tracker-notified-notes-v1";
 
   // Per-device "which note ids already got a notification today" marker -
-  // same reasoning as NOTIFY_LAST_DATE_KEY above: throwaway scheduling
-  // state, deliberately kept out of state.settings and out of the Supabase
-  // sync payload.
+  // throwaway scheduling state, deliberately kept out of state.settings
+  // and out of the Supabase sync payload.
   function getNotifiedNoteState() {
     try {
       var raw = localStorage.getItem(NOTE_NOTIFY_KEY);
@@ -2046,7 +1939,6 @@
   }
 
   function checkUpcomingNoteNotifications() {
-    if (!state.settings.notifyEnabled) return;
     if (notificationSupport() !== "granted") return;
 
     var todayISO = toISODate(new Date());
@@ -2566,9 +2458,7 @@
   }
 
   // Keeps the toggle's checked/enabled state and hint text in sync with
-  // reality (support, sign-in state, and the actual subscription) -
-  // mirrors updateNotifyToggleAvailability's role for the tab-only
-  // reminder above.
+  // reality (support, sign-in state, and the actual subscription).
   function updatePushToggleAvailability(subscribed) {
     var supported = pushSupported();
     var disabled = !supported || !currentUserId;
@@ -2584,6 +2474,17 @@
     } else {
       els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
     }
+
+    // The late-clock-out reminder is delivered entirely server-side over
+    // Push, so it can't mean anything without an active subscription - if
+    // Push just got disabled (or never was), force it off and lock the
+    // toggle so the UI never shows it as enabled with nothing to deliver it.
+    if (!subscribed && state.settings.notifyEnabled) {
+      state.settings.notifyEnabled = false;
+      persistSettings();
+    }
+    els.sNotifyLateOut.disabled = !subscribed;
+    els.sNotifyLateOut.checked = !!subscribed && !!state.settings.notifyEnabled;
   }
 
   // Re-derives the toggle state from the Service Worker's actual
@@ -2700,6 +2601,21 @@
     });
   });
 
+  // Piggybacks on the Push toggle above rather than requesting its own
+  // permission - the reminder is delivered server-side (see notifyEnabled's
+  // definition near the top of state.settings) and is meaningless without
+  // an active Push subscription, so refuse to turn on if Push isn't already
+  // enabled instead of prompting for anything here.
+  els.sNotifyLateOut.addEventListener("change", function () {
+    if (els.sNotifyLateOut.checked && !els.sPushEnabled.checked) {
+      els.sNotifyLateOut.checked = false;
+      showToast("ต้องเปิดการแจ้งเตือนแบบ Push ด้านบนก่อน");
+      return;
+    }
+    state.settings.notifyEnabled = els.sNotifyLateOut.checked;
+    persistSettings();
+  });
+
   /* ============================================================
    * Init
    * ========================================================== */
@@ -2711,7 +2627,6 @@
   renderNoteList();
   loadSettingsToForm();
   renderSummary();
-  checkEndOfWorkNotification();
   checkUpcomingNoteNotifications();
   refreshPushToggleState();
 })();

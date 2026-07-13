@@ -401,17 +401,6 @@
 
       <h2 class="card__title card__title--spaced">การแจ้งเตือน</h2>
       <div class="field">
-        <label class="switch-row" id="notifyRow" for="s-notifyenabled">
-          <span>เปิดการแจ้งเตือนเมื่อถึงเวลาเลิกงาน</span>
-          <span class="switch">
-            <input type="checkbox" id="s-notifyenabled" disabled />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <p class="hint" id="notifyHint">กรอก "เวลาเลิกงานปกติ" ด้านบนก่อน จึงจะเปิดใช้ได้ — เตือนวันละ 1 ครั้งเมื่อถึงเวลานั้นแล้วยังไม่ได้บันทึกเวลาทำงานของวันนี้ ทำงานเฉพาะตอนเปิดแท็บนี้อยู่เท่านั้น</p>
-      </div>
-
-      <div class="field">
         <label class="switch-row" id="pushRow" for="s-pushenabled">
           <span>เปิดการแจ้งเตือนแบบ Push (ทำงานแม้ปิดแอป)</span>
           <span class="switch">
@@ -434,6 +423,17 @@
           <label for="s-normalend">เวลาสิ้นสุดงานปกติ</label>
           <input type="time" id="s-normalend" value="17:00" />
         </div>
+      </div>
+
+      <div class="field">
+        <label class="switch-row" for="s-notifylateout">
+          <span>แจ้งเตือนถ้ายังไม่บันทึกเวลาออกงาน (15 นาทีหลังเวลาเลิกงาน)</span>
+          <span class="switch">
+            <input type="checkbox" id="s-notifylateout" />
+            <span class="switch__track"><span class="switch__thumb"></span></span>
+          </span>
+        </label>
+        <p class="hint">ต้องเปิด Push notification ด้านบนก่อน ถึงจะได้รับการแจ้งเตือนนี้</p>
       </div>
 
       <div class="field">
