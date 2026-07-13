@@ -1,0 +1,6 @@
+.claude/
+node_modules/
+test-results/
+.env
+.env.local
+supabase/.temp/
