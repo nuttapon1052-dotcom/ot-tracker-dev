@@ -480,6 +480,8 @@
   var els = {
     headerTitle: $("headerTitle"),
     themeToggleBtn: $("themeToggleBtn"),
+    colorThemeToggleBtn: $("colorThemeToggleBtn"),
+    colorThemePopover: $("colorThemePopover"),
     tabbar: $("tabbar"),
     views: {
       entry: $("view-entry"),
@@ -675,13 +677,23 @@
     return attr === "dark" || attr === "light" ? attr : (systemPrefersDark() ? "dark" : "light");
   }
 
+  var ICON_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="โหมดสว่าง"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>';
+  var ICON_MOON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="โหมดมืด"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg>';
+  var ICON_REFRESH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="กำลังซิงก์"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>';
+  var ICON_WARNING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="คำเตือน"><path d="m12 2 10 18H2L12 2Z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none"/></svg>';
+  var ICON_CLOUD_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ซิงก์แล้ว"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A4 4 0 0 0 6 19h11.5Z"/><path d="m9 15 2 2 4-4"/></svg>';
+  var ICON_NOTE = '<svg class="note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="โน้ต"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+
   function updateThemeToggleIcon(theme) {
-    els.themeToggleBtn.textContent = theme === "dark" ? "☀️" : "🌙";
+    els.themeToggleBtn.innerHTML = theme === "dark" ? ICON_SUN : ICON_MOON;
   }
 
   function updateMetaThemeColor(theme) {
     var metaThemeColor = document.querySelector('meta[name="theme-color"]');
-    if (metaThemeColor) metaThemeColor.setAttribute("content", theme === "dark" ? "#0d0d0d" : "#2a78d6");
+    if (!metaThemeColor) return;
+    var varName = theme === "dark" ? "--page" : "--series-normal";
+    var color = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+    metaThemeColor.setAttribute("content", color || (theme === "dark" ? "#0d0d0d" : "#2a78d6"));
   }
 
   function applyTheme(theme) {
@@ -699,31 +711,99 @@
   updateMetaThemeColor(currentTheme());
 
   /* ============================================================
-   * Color theme (sunset / ocean / berry / violet)
+   * Color theme (sunset / ocean / midnight)
    * Separate from dark/light above — uses [data-color-theme] on
    * <html>, not [data-theme], to avoid clobbering dark mode.
+   * Picked from the popover next to the dark/light toggle in the
+   * header (#colorThemeToggleBtn / #colorThemePopover).
    * ========================================================== */
   var COLOR_THEME_KEY = "ot-tracker-color-theme";
-  var themePicker = document.getElementById("themePicker");
+  var COLOR_THEMES = ["sunset", "ocean", "midnight"];
+  var themePicker = els.colorThemePopover;
 
   function applyColorTheme(theme) {
+    if (COLOR_THEMES.indexOf(theme) === -1) theme = "sunset";
     document.documentElement.setAttribute("data-color-theme", theme);
     if (themePicker) {
       Array.prototype.forEach.call(themePicker.querySelectorAll(".theme-swatch"), function (btn) {
         btn.classList.toggle("is-active", btn.dataset.colorTheme === theme);
       });
     }
+    updateMetaThemeColor(currentTheme());
   }
 
   applyColorTheme(localStorage.getItem(COLOR_THEME_KEY) || "sunset");
 
+  /* ============================================================
+   * Background style (flat / gradient / glass)
+   * Independent of both dark/light and color theme — uses
+   * [data-bg-style] on <html>. Picked from the same header popover,
+   * second row of swatches.
+   * ========================================================== */
+  var BG_STYLE_KEY = "ot-tracker-bg-style";
+  var BG_STYLES = ["flat", "gradient", "glass"];
+
+  function applyBgStyle(style) {
+    if (BG_STYLES.indexOf(style) === -1) style = "gradient";
+    document.documentElement.setAttribute("data-bg-style", style);
+    if (themePicker) {
+      Array.prototype.forEach.call(themePicker.querySelectorAll(".bgstyle-swatch"), function (btn) {
+        btn.classList.toggle("is-active", btn.dataset.bgStyleOption === style);
+      });
+    }
+  }
+
+  applyBgStyle(localStorage.getItem(BG_STYLE_KEY) || "gradient");
+
   if (themePicker) {
     themePicker.addEventListener("click", function (e) {
-      var btn = e.target.closest(".theme-swatch");
-      if (!btn) return;
-      var theme = btn.dataset.colorTheme;
-      try { localStorage.setItem(COLOR_THEME_KEY, theme); } catch (err) {}
-      applyColorTheme(theme);
+      var colorBtn = e.target.closest(".theme-swatch");
+      if (colorBtn) {
+        var theme = colorBtn.dataset.colorTheme;
+        try { localStorage.setItem(COLOR_THEME_KEY, theme); } catch (err) {}
+        applyColorTheme(theme);
+        closeColorThemePopover();
+        return;
+      }
+      var bgBtn = e.target.closest(".bgstyle-swatch");
+      if (bgBtn) {
+        var style = bgBtn.dataset.bgStyleOption;
+        try { localStorage.setItem(BG_STYLE_KEY, style); } catch (err) {}
+        applyBgStyle(style);
+        closeColorThemePopover();
+      }
+    });
+  }
+
+  function openColorThemePopover() {
+    if (!els.colorThemePopover) return;
+    els.colorThemePopover.classList.remove("hidden");
+    els.colorThemeToggleBtn.setAttribute("aria-expanded", "true");
+    document.addEventListener("click", onColorThemePopoverOutsideClick, true);
+    document.addEventListener("keydown", onColorThemePopoverKeydown);
+  }
+
+  function closeColorThemePopover() {
+    if (!els.colorThemePopover) return;
+    els.colorThemePopover.classList.add("hidden");
+    els.colorThemeToggleBtn.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", onColorThemePopoverOutsideClick, true);
+    document.removeEventListener("keydown", onColorThemePopoverKeydown);
+  }
+
+  function onColorThemePopoverOutsideClick(e) {
+    if (els.colorThemePopover.contains(e.target) || els.colorThemeToggleBtn.contains(e.target)) return;
+    closeColorThemePopover();
+  }
+
+  function onColorThemePopoverKeydown(e) {
+    if (e.key === "Escape") closeColorThemePopover();
+  }
+
+  if (els.colorThemeToggleBtn && els.colorThemePopover) {
+    els.colorThemeToggleBtn.addEventListener("click", function () {
+      if (els.colorThemePopover.classList.contains("hidden")) openColorThemePopover();
+      else closeColorThemePopover();
     });
   }
 
@@ -872,7 +952,7 @@
       ensureHolidaysForYear(year);
     }
     if (holidayName) {
-      els.holidayNotice.textContent = "🔴 " + holidayDisplayName(holidayName) + " — วันหยุดราชการ";
+      els.holidayNotice.innerHTML = '<svg class="notice-icon" viewBox="0 0 24 24" fill="currentColor" role="img" aria-label="วันหยุดราชการ"><circle cx="12" cy="12" r="6"/></svg> ' + escapeHtml(holidayDisplayName(holidayName)) + " — วันหยุดราชการ";
       els.holidayNotice.classList.remove("hidden");
     } else {
       els.holidayNotice.classList.add("hidden");
@@ -907,7 +987,7 @@
       return;
     }
     var html = "";
-    if (c.overnight) html += "🌙 กะข้ามคืน (คำนวณเลยเที่ยงคืน)<br/>";
+    if (c.overnight) html += "กะข้ามคืน (คำนวณเลยเที่ยงคืน)<br/>";
     html += "ชั่วโมงทำงานปกติ <strong>" + fmtHours(c.normalHours) + " ชม.</strong> = " + fmtMoney(c.normalPay) + "<br/>";
     html += "ชั่วโมง OT รวม <strong class=\"preview__ot\">" + fmtHours(c.otHours) + " ชม.</strong>";
     if (c.otHours > 0) html += " (x" + c.multiplier + ")";
@@ -1141,7 +1221,7 @@
     els.entryList.innerHTML = sorted.map(function (entry) {
       var c = computeEntry(entry, state.settings);
       var dateLabel = dfFull.format(fromISODate(entry.date));
-      var noteHtml = entry.note ? '<div class="entry-item__note">📝 ' + escapeHtml(entry.note) + "</div>" : "";
+      var noteHtml = entry.note ? '<div class="entry-item__note">' + ICON_NOTE + escapeHtml(entry.note) + "</div>" : "";
       var payLine = c ? fmtMoney(c.totalPay) : "-";
       var hoursLine = c
         ? ("ปกติ " + fmtHours(c.normalHours) + " ชม. (" + fmtMoney(c.normalPay) + ")" +
@@ -1292,7 +1372,7 @@
     }
 
     els.noteList.innerHTML = sorted.map(function (note) {
-      var descHtml = note.description ? '<div class="entry-item__note">📝 ' + escapeHtml(note.description) + "</div>" : "";
+      var descHtml = note.description ? '<div class="entry-item__note">' + ICON_NOTE + escapeHtml(note.description) + "</div>" : "";
       return (
         '<div class="entry-item" data-id="' + note.id + '">' +
           '<div class="entry-item__main">' +
@@ -1676,28 +1756,24 @@
     return months;
   }
 
-  var lastTrendMonths = null;
-
   function renderTrendChart(months) {
-    lastTrendMonths = months;
     var scaleMax = Math.max.apply(null, months.map(function (m) { return m.otHours; }).concat([10]));
 
     els.trendChart.innerHTML = months.map(function (m, idx) {
       var pct = scaleMax ? Math.max((m.otHours / scaleMax) * 100, m.otHours > 0 ? 4 : 2) : 2;
       var color = otColorForHours(m.otHours);
       return (
-        '<div class="trend-col">' +
+        '<div class="trend-col' + (m.isCurrent ? " is-current" : "") + '">' +
+          '<div class="trend-col__value">' + (m.otHours > 0 ? fmtHours(m.otHours) : "") + "</div>" +
           '<div class="trend-col__bar-wrap">' +
             '<div class="trend-col__bar" data-idx="' + idx + '" tabindex="0" role="button" ' +
               'aria-label="' + m.fullLabel + " OT " + fmtHours(m.otHours) + ' ชั่วโมง" ' +
-              'style="height:' + pct.toFixed(1) + '%; background:' + color + '; animation-delay:' + (idx * 45) + 'ms;"></div>' +
+              'style="height:' + pct.toFixed(1) + '%; --bar-color:' + color + '; animation-delay:' + (idx * 45) + 'ms;"></div>' +
           "</div>" +
           '<div class="trend-col__label' + (m.isCurrent ? " is-current" : "") + '">' + m.label + "</div>" +
         "</div>"
       );
     }).join("");
-
-    drawTrendLine();
 
     function showDetail(idx) {
       var m = months[idx];
@@ -1724,45 +1800,6 @@
     }
     showDetail(defaultIdx);
   }
-
-  // Faint line tracing the top of each bar, so the overall direction reads
-  // at a glance. Drawn from measured pixel positions (not the bars' %
-  // heights) so it lines up exactly regardless of container width; the
-  // bars use clip-path (not height/transform) for their grow-in animation
-  // specifically so this measurement is never taken mid-animation.
-  function drawTrendLine() {
-    var old = els.trendChart.querySelector(".trend-line-svg");
-    if (old) old.remove();
-
-    var bars = els.trendChart.querySelectorAll(".trend-col__bar");
-    if (bars.length < 2) return;
-    var chartRect = els.trendChart.getBoundingClientRect();
-    if (!chartRect.width || !chartRect.height) return;
-
-    var svgNS = "http://www.w3.org/2000/svg";
-    var points = Array.prototype.map.call(bars, function (bar) {
-      var r = bar.getBoundingClientRect();
-      return (r.left + r.width / 2 - chartRect.left).toFixed(1) + "," + (r.top - chartRect.top).toFixed(1);
-    });
-
-    var svg = document.createElementNS(svgNS, "svg");
-    svg.setAttribute("class", "trend-line-svg");
-    svg.setAttribute("width", chartRect.width);
-    svg.setAttribute("height", chartRect.height);
-    var polyline = document.createElementNS(svgNS, "polyline");
-    polyline.setAttribute("class", "trend-line-path");
-    polyline.setAttribute("points", points.join(" "));
-    svg.appendChild(polyline);
-    els.trendChart.appendChild(svg);
-  }
-
-  var trendLineResizeTimer = null;
-  window.addEventListener("resize", function () {
-    clearTimeout(trendLineResizeTimer);
-    trendLineResizeTimer = setTimeout(function () {
-      if (lastTrendMonths && !els.views.summary.classList.contains("hidden")) drawTrendLine();
-    }, 150);
-  });
 
   function renderSalaryBreakdown(agg, showCard) {
     els.salaryBreakdownCard.classList.toggle("hidden", !showCard);
@@ -2288,18 +2325,18 @@
     els.syncStatusRow.classList.remove("sync-status--syncing", "sync-status--error");
     if (syncStatus === "syncing") {
       els.syncStatusRow.classList.add("sync-status--syncing");
-      els.syncStatusIcon.textContent = "🔄";
+      els.syncStatusIcon.innerHTML = ICON_REFRESH;
       els.syncStatusText.textContent = "กำลังซิงก์...";
       els.syncRetryBtn.classList.add("hidden");
       els.syncErrorBanner.classList.add("hidden");
     } else if (syncStatus === "error") {
       els.syncStatusRow.classList.add("sync-status--error");
-      els.syncStatusIcon.textContent = "⚠️";
+      els.syncStatusIcon.innerHTML = ICON_WARNING;
       els.syncStatusText.textContent = "ซิงก์ไม่สำเร็จ · " + formatLastSync();
       els.syncRetryBtn.classList.remove("hidden");
       els.syncErrorBanner.classList.remove("hidden");
     } else {
-      els.syncStatusIcon.textContent = "☁️✓";
+      els.syncStatusIcon.innerHTML = ICON_CLOUD_CHECK;
       els.syncStatusText.textContent = formatLastSync();
       els.syncRetryBtn.classList.add("hidden");
       els.syncErrorBanner.classList.add("hidden");

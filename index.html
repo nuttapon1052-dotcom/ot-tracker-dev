@@ -13,7 +13,12 @@
     document.documentElement.setAttribute("data-theme", theme);
 
     var savedColorTheme = localStorage.getItem("ot-tracker-color-theme");
-    document.documentElement.setAttribute("data-color-theme", savedColorTheme || "sunset");
+    var validColorThemes = ["sunset", "ocean", "midnight"];
+    document.documentElement.setAttribute("data-color-theme", validColorThemes.indexOf(savedColorTheme) !== -1 ? savedColorTheme : "sunset");
+
+    var savedBgStyle = localStorage.getItem("ot-tracker-bg-style");
+    var validBgStyles = ["flat", "gradient", "glass"];
+    document.documentElement.setAttribute("data-bg-style", validBgStyles.indexOf(savedBgStyle) !== -1 ? savedBgStyle : "gradient");
   } catch (e) {}
 })();
 </script>
@@ -32,6 +37,7 @@
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
 <link rel="icon" href="icons/icon-192.png" />
 
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@600;700;800&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="css/style.css" />
 <link rel="stylesheet" href="css/theme.css" />
 </head>
@@ -39,12 +45,63 @@
 
 <header class="app-header">
   <div class="app-header__title">
-    <span class="app-header__logo">⏱️</span>
+    <span class="app-header__logo">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="OT Tracker"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5"/><path d="M9 2h6"/><path d="M18.5 4.5 20 6"/></svg>
+    </span>
     <span id="headerTitle">OT Tracker</span>
   </div>
   <div class="app-header__actions">
-    <button id="themeToggleBtn" class="btn btn--icon btn--theme" type="button" aria-label="สลับธีมสว่าง/มืด">🌙</button>
-    <button id="installBtn" class="btn btn--ghost btn--small hidden" type="button">📲 ติดตั้งแอป</button>
+    <div class="color-theme-control">
+      <button id="colorThemeToggleBtn" class="btn btn--icon btn--theme" type="button" aria-label="เลือกธีมสีและพื้นหลัง" aria-haspopup="dialog" aria-expanded="false">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ธีมสี"><path d="M12 22c5.523 0 10-3.582 10-8 0-2-1-3-3-3h-2a2 2 0 0 1-2-2c0-1 .5-1.5 1-2a2 2 0 0 0-1-3.874A10 10 0 0 0 12 2C6.477 2 2 6.477 2 12s4.477 10 10 10Z"/><circle cx="6.5" cy="11.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="9.5" cy="7.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="14.5" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <div id="colorThemePopover" class="color-theme-popover hidden" role="dialog" aria-label="เลือกธีมสีและพื้นหลัง">
+        <div class="color-theme-popover__label">ธีมสี</div>
+        <div class="theme-picker">
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="sunset" aria-label="ธีม Sunset">
+              <span class="theme-swatch__half" style="background:#FF6B4A"></span>
+              <span class="theme-swatch__half" style="background:#00A896"></span>
+            </button>
+            <div class="theme-swatch__caption">Sunset</div>
+          </div>
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="ocean" aria-label="ธีม Ocean">
+              <span class="theme-swatch__half" style="background:#2F6FB0"></span>
+              <span class="theme-swatch__half" style="background:#B8770F"></span>
+            </button>
+            <div class="theme-swatch__caption">Ocean</div>
+          </div>
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="midnight" aria-label="ธีม Midnight">
+              <span class="theme-swatch__half" style="background:#8B5CB0"></span>
+              <span class="theme-swatch__half" style="background:#0E9F76"></span>
+            </button>
+            <div class="theme-swatch__caption">Midnight</div>
+          </div>
+        </div>
+        <div class="color-theme-popover__label color-theme-popover__label--spaced">พื้นหลัง</div>
+        <div class="theme-picker">
+          <div>
+            <button type="button" class="bgstyle-swatch" data-bg-style-option="flat" aria-label="พื้นหลังแบบ Flat"></button>
+            <div class="theme-swatch__caption">Flat</div>
+          </div>
+          <div>
+            <button type="button" class="bgstyle-swatch" data-bg-style-option="gradient" aria-label="พื้นหลังแบบ Gradient"></button>
+            <div class="theme-swatch__caption">Gradient</div>
+          </div>
+          <div>
+            <button type="button" class="bgstyle-swatch" data-bg-style-option="glass" aria-label="พื้นหลังแบบ Glass"></button>
+            <div class="theme-swatch__caption">Glass</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <button id="themeToggleBtn" class="btn btn--icon btn--theme" type="button" aria-label="สลับธีมสว่าง/มืด"></button>
+    <button id="installBtn" class="btn btn--ghost btn--small hidden" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ติดตั้ง"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      ติดตั้งแอป
+    </button>
   </div>
 </header>
 
@@ -65,11 +122,11 @@
         <label for="dateTrigger">วันที่</label>
         <button type="button" id="dateTrigger" class="date-trigger" aria-haspopup="dialog">
           <span id="dateTriggerText">เลือกวันที่</span>
-          <span class="date-trigger__icon">📅</span>
+          <span class="date-trigger__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ปฏิทิน"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
         </button>
         <input type="hidden" id="f-date" />
         <div class="date-notices">
-          <p id="weekendNotice" class="weekend-notice hidden">📅 วันหยุดสุดสัปดาห์ — นับชั่วโมงทำงานทั้งหมดเป็น OT</p>
+          <p id="weekendNotice" class="weekend-notice hidden"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="วันหยุด"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg> วันหยุดสุดสัปดาห์ — นับชั่วโมงทำงานทั้งหมดเป็น OT</p>
           <p id="holidayNotice" class="holiday-notice hidden"></p>
         </div>
       </div>
@@ -151,7 +208,7 @@
             <label for="noteStartTrigger">วันที่เริ่ม</label>
             <button type="button" id="noteStartTrigger" class="date-trigger" aria-haspopup="dialog">
               <span id="noteStartTriggerText">เลือกวันที่</span>
-              <span class="date-trigger__icon">📅</span>
+              <span class="date-trigger__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ปฏิทิน"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
             </button>
             <input type="hidden" id="n-startdate" />
           </div>
@@ -159,7 +216,7 @@
             <label for="noteEndTrigger">วันที่สิ้นสุด</label>
             <button type="button" id="noteEndTrigger" class="date-trigger" aria-haspopup="dialog">
               <span id="noteEndTriggerText">เลือกวันที่</span>
-              <span class="date-trigger__icon">📅</span>
+              <span class="date-trigger__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ปฏิทิน"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
             </button>
             <input type="hidden" id="n-enddate" />
           </div>
@@ -196,7 +253,7 @@
     </div>
 
     <div class="export-row">
-      <button type="button" id="exportExcelBtn" class="btn btn--secondary btn--small">📊 Export Excel (.xlsx)</button>
+      <button type="button" id="exportExcelBtn" class="btn btn--secondary btn--small"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Export"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="9" x2="9" y2="21"/></svg> Export Excel (.xlsx)</button>
       <p class="hint" id="exportHint">ดาวน์โหลดรายการบันทึกเวลาของเดือนนี้เป็นไฟล์ Excel</p>
     </div>
 
@@ -242,11 +299,11 @@
       <h2 class="card__title">แยก OT วันธรรมดา / วันหยุดสุดสัปดาห์</h2>
       <div class="salary-breakdown">
         <div class="salary-breakdown__row">
-          <span>OT วันธรรมดา</span>
+          <span class="salary-breakdown__label"><span class="icon-tonal icon-tonal--sm icon-tonal--primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="วันธรรมดา"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>OT วันธรรมดา</span>
           <span id="otWeekdayVal">0 ชม. · ฿0</span>
         </div>
         <div class="salary-breakdown__row">
-          <span>OT วันเสาร์-อาทิตย์</span>
+          <span class="salary-breakdown__label"><span class="icon-tonal icon-tonal--sm icon-tonal--primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="วันเสาร์-อาทิตย์"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg></span>OT วันเสาร์-อาทิตย์</span>
           <span id="otWeekendVal">0 ชม. · ฿0</span>
         </div>
       </div>
@@ -319,251 +376,227 @@
           <button type="button" id="logoutBtn" class="btn btn--ghost btn--small">ออกจากระบบ</button>
         </div>
         <div id="syncStatusRow" class="sync-status hidden">
-          <span id="syncStatusIcon" class="sync-status__icon">☁️</span>
+          <span id="syncStatusIcon" class="sync-status__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ซิงก์"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A4 4 0 0 0 6 19h11.5Z"/></svg></span>
           <span id="syncStatusText" class="sync-status__text"></span>
           <button type="button" id="syncRetryBtn" class="btn btn--ghost btn--small hidden">ลองซิงก์ใหม่</button>
         </div>
-        <p id="syncErrorBanner" class="sync-error-banner hidden">⚠️ ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)</p>
+        <p id="syncErrorBanner" class="sync-error-banner hidden"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="คำเตือน"><path d="m12 2 10 18H2L12 2Z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none"/></svg> ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)</p>
       </div>
     </div>
 
-    <form id="settingsForm" class="card form-card">
-      <h2 class="card__title">ผู้บันทึก</h2>
-      <div class="field">
-        <label for="s-recordername">ชื่อผู้บันทึก</label>
-        <input type="text" id="s-recordername" placeholder="เช่น สมชาย" maxlength="40" autocomplete="off" />
-        <p class="hint">แสดงชื่อนี้ที่หัวเว็บและหน้าสรุป</p>
+    <form id="settingsForm">
+      <div class="card form-card">
+        <h2 class="card__title">โปรไฟล์ &amp; สกุลเงิน</h2>
+        <div class="field">
+          <label for="s-recordername">ชื่อผู้บันทึก</label>
+          <input type="text" id="s-recordername" placeholder="เช่น สมชาย" maxlength="40" autocomplete="off" />
+          <p class="hint">แสดงชื่อนี้ที่หัวเว็บและหน้าสรุป</p>
+        </div>
+
+        <div class="field">
+          <label for="currencyTrigger">เลือกสกุลเงิน</label>
+          <button type="button" id="currencyTrigger" class="date-trigger" aria-haspopup="dialog">
+            <span class="currency-trigger__content">
+              <span class="currency-flag" id="currencyTriggerFlag"></span>
+              <span id="currencyTriggerLabel">บาทไทย (THB)</span>
+            </span>
+            <span class="date-trigger__icon">▾</span>
+          </button>
+        </div>
+
+        <p class="hint">เปลี่ยนธีมสีและสไตล์พื้นหลังได้ที่ปุ่มไอคอนธีมสีบนหัวเว็บ ข้างปุ่มสลับโหมดมืด/สว่าง</p>
       </div>
 
-      <h2 class="card__title card__title--spaced">สกุลเงิน</h2>
-      <div class="field">
-        <label for="currencyTrigger">เลือกสกุลเงิน</label>
-        <button type="button" id="currencyTrigger" class="date-trigger" aria-haspopup="dialog">
-          <span class="currency-trigger__content">
-            <span class="currency-flag" id="currencyTriggerFlag"></span>
-            <span id="currencyTriggerLabel">บาทไทย (THB)</span>
-          </span>
-          <span class="date-trigger__icon">▾</span>
-        </button>
+      <div class="card form-card">
+        <h2 class="card__title">เงินเดือน &amp; เป้าหมาย</h2>
+
+        <div class="field">
+          <label for="s-monthlysalary" id="monthlySalaryLabel">เงินเดือน</label>
+          <input type="text" id="s-monthlysalary" class="money-input" inputmode="decimal" autocomplete="off" />
+          <p class="hint">ตัวเลขคงที่ แสดงในหน้าสรุปผลเท่านั้น ไม่เกี่ยวข้องกับการคำนวณ OT</p>
+        </div>
+
+        <div class="field">
+          <label for="s-hourlyrate" id="hourlyRateLabel">ค่าแรงต่อชั่วโมง</label>
+          <input type="text" id="s-hourlyrate" class="money-input" inputmode="decimal" autocomplete="off" />
+        </div>
+
+        <h2 class="card__title card__title--spaced">เป้าหมายรายเดือน</h2>
+        <div class="field">
+          <label for="s-otgoal" id="otGoalLabel">เป้าหมายเงิน OT ต่อเดือน</label>
+          <input type="text" id="s-otgoal" class="money-input" inputmode="decimal" autocomplete="off" placeholder="0" />
+          <p class="hint">ตั้งไว้ 0 เพื่อปิดการแสดงผลความคืบหน้าในหน้าสรุป</p>
+        </div>
       </div>
 
-      <h2 class="card__title card__title--spaced">ธีมสี</h2>
-      <div class="field">
-        <p class="hint">เลือกโทนสีของแอป เปลี่ยนได้ตลอดเวลา</p>
-        <div class="theme-picker" id="themePicker" style="display:flex; gap:14px; margin-top:12px; flex-wrap:wrap;">
-          <div>
-            <button type="button" class="theme-swatch" data-color-theme="sunset" aria-label="ธีม Sunset Growth">
-              <span class="theme-swatch__half" style="background:#FF6B4A"></span>
-              <span class="theme-swatch__half" style="background:#00B8A9"></span>
-            </button>
-            <div class="theme-swatch__caption">Sunset<br/>Growth</div>
+      <div class="card form-card">
+        <h2 class="card__title">เวลาเข้า-ออกงานปกติ</h2>
+        <p class="hint">ค่าที่เติมให้อัตโนมัติในหน้าบันทึกเวลาเท่านั้น ไม่เกี่ยวข้องกับการคำนวณ OT (การคำนวณ OT ตั้งค่าได้ที่การ์ด "ตารางเวลาทำงานมาตรฐาน" ด้านล่าง) — ว่างเปล่าไว้ก่อนจนกว่าจะกรอก</p>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="s-defaulttimein">เวลาเข้างานปกติ</label>
+            <input type="time" id="s-defaulttimein" />
           </div>
-          <div>
-            <button type="button" class="theme-swatch" data-color-theme="ocean" aria-label="ธีม Ocean Gold">
-              <span class="theme-swatch__half" style="background:#2F6FB0"></span>
-              <span class="theme-swatch__half" style="background:#F5A623"></span>
-            </button>
-            <div class="theme-swatch__caption">Ocean<br/>Gold</div>
-          </div>
-          <div>
-            <button type="button" class="theme-swatch" data-color-theme="berry" aria-label="ธีม Berry Mint">
-              <span class="theme-swatch__half" style="background:#E5527F"></span>
-              <span class="theme-swatch__half" style="background:#2BC7A0"></span>
-            </button>
-            <div class="theme-swatch__caption">Berry<br/>Mint</div>
-          </div>
-          <div>
-            <button type="button" class="theme-swatch" data-color-theme="violet" aria-label="ธีม Violet Pop">
-              <span class="theme-swatch__half" style="background:#7C5CFC"></span>
-              <span class="theme-swatch__half" style="background:#8BC34A"></span>
-            </button>
-            <div class="theme-swatch__caption">Violet<br/>Pop</div>
+          <div class="field">
+            <label for="s-defaulttimeout">เวลาเลิกงานปกติ</label>
+            <input type="time" id="s-defaulttimeout" />
           </div>
         </div>
-      </div>
 
-      <h2 class="card__title card__title--spaced">เงินเดือน &amp; ค่าแรง</h2>
-
-      <div class="field">
-        <label for="s-monthlysalary" id="monthlySalaryLabel">เงินเดือน</label>
-        <input type="text" id="s-monthlysalary" class="money-input" inputmode="decimal" autocomplete="off" />
-        <p class="hint">ตัวเลขคงที่ แสดงในหน้าสรุปผลเท่านั้น ไม่เกี่ยวข้องกับการคำนวณ OT</p>
-      </div>
-
-      <div class="field">
-        <label for="s-hourlyrate" id="hourlyRateLabel">ค่าแรงต่อชั่วโมง</label>
-        <input type="text" id="s-hourlyrate" class="money-input" inputmode="decimal" autocomplete="off" />
-      </div>
-
-      <h2 class="card__title card__title--spaced">เป้าหมายรายเดือน</h2>
-      <div class="field">
-        <label for="s-otgoal" id="otGoalLabel">เป้าหมายเงิน OT ต่อเดือน</label>
-        <input type="text" id="s-otgoal" class="money-input" inputmode="decimal" autocomplete="off" placeholder="0" />
-        <p class="hint">ตั้งไว้ 0 เพื่อปิดการแสดงผลความคืบหน้าในหน้าสรุป</p>
-      </div>
-
-      <h2 class="card__title card__title--spaced">เวลาเข้า-ออกงานปกติ</h2>
-      <p class="hint">ค่าที่เติมให้อัตโนมัติในหน้าบันทึกเวลาเท่านั้น ไม่เกี่ยวข้องกับการคำนวณ OT (การคำนวณ OT ตั้งค่าได้ที่หัวข้อ "ตารางเวลาทำงานมาตรฐาน" ด้านล่าง) — ว่างเปล่าไว้ก่อนจนกว่าจะกรอก</p>
-
-      <div class="field-row">
         <div class="field">
-          <label for="s-defaulttimein">เวลาเข้างานปกติ</label>
-          <input type="time" id="s-defaulttimein" />
+          <label class="switch-row" id="lockTimeInRow" for="s-locktimein">
+            <span>ล็อคเวลาเข้างาน</span>
+            <span class="switch">
+              <input type="checkbox" id="s-locktimein" disabled />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint">กรอกเวลาเข้างานปกติด้านบนก่อน จึงจะเปิดใช้ได้ — เมื่อเปิด เวลาเข้างานจะเติมให้อัตโนมัติทุกครั้งที่เปิดฟอร์มบันทึกใหม่</p>
         </div>
+
         <div class="field">
-          <label for="s-defaulttimeout">เวลาเลิกงานปกติ</label>
-          <input type="time" id="s-defaulttimeout" />
+          <label class="switch-row" id="lockTimeOutRow" for="s-locktimeout">
+            <span>ล็อคเวลาเลิกงาน</span>
+            <span class="switch">
+              <input type="checkbox" id="s-locktimeout" disabled />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint">กรอกเวลาเลิกงานปกติด้านบนก่อน จึงจะเปิดใช้ได้ · วันเสาร์-อาทิตย์จะเว้นว่างเสมอไม่ว่าจะล็อคไว้หรือไม่</p>
         </div>
       </div>
 
-      <div class="field">
-        <label class="switch-row" id="lockTimeInRow" for="s-locktimein">
-          <span>ล็อคเวลาเข้างาน</span>
-          <span class="switch">
-            <input type="checkbox" id="s-locktimein" disabled />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <p class="hint">กรอกเวลาเข้างานปกติด้านบนก่อน จึงจะเปิดใช้ได้ — เมื่อเปิด เวลาเข้างานจะเติมให้อัตโนมัติทุกครั้งที่เปิดฟอร์มบันทึกใหม่</p>
-      </div>
+      <div class="card form-card">
+        <h2 class="card__title">ตารางเวลาทำงานมาตรฐาน &amp; อัตรา OT</h2>
+        <p class="hint">ระบบจะคำนวณชั่วโมงทำงานปกติและ OT อัตโนมัติตามช่วงเวลาที่ตั้งไว้นี้ ปรับได้ตลอดหากกฎการทำงานเปลี่ยน</p>
 
-      <div class="field">
-        <label class="switch-row" id="lockTimeOutRow" for="s-locktimeout">
-          <span>ล็อคเวลาเลิกงาน</span>
-          <span class="switch">
-            <input type="checkbox" id="s-locktimeout" disabled />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <p class="hint">กรอกเวลาเลิกงานปกติด้านบนก่อน จึงจะเปิดใช้ได้ · วันเสาร์-อาทิตย์จะเว้นว่างเสมอไม่ว่าจะล็อคไว้หรือไม่</p>
-      </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="s-workstart">เวลาเริ่มงาน</label>
+            <input type="time" id="s-workstart" value="08:00" />
+          </div>
+          <div class="field">
+            <label for="s-normalend">เวลาสิ้นสุดงานปกติ</label>
+            <input type="time" id="s-normalend" value="17:00" />
+          </div>
+        </div>
 
-      <h2 class="card__title card__title--spaced">การแจ้งเตือน</h2>
-      <div class="field">
-        <label class="switch-row" id="pushRow" for="s-pushenabled">
-          <span>เปิดการแจ้งเตือนแบบ Push (ทำงานแม้ปิดแอป)</span>
-          <span class="switch">
-            <input type="checkbox" id="s-pushenabled" disabled />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <p class="hint" id="pushHint">ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว</p>
-      </div>
-
-      <h2 class="card__title card__title--spaced">ตารางเวลาทำงานมาตรฐาน</h2>
-      <p class="hint">ระบบจะคำนวณชั่วโมงทำงานปกติและ OT อัตโนมัติตามช่วงเวลาที่ตั้งไว้นี้ ปรับได้ตลอดหากกฎการทำงานเปลี่ยน</p>
-
-      <div class="field-row">
         <div class="field">
-          <label for="s-workstart">เวลาเริ่มงาน</label>
-          <input type="time" id="s-workstart" value="08:00" />
+          <label class="switch-row" for="s-haslunchbreak">
+            <span>มีพักเที่ยง</span>
+            <span class="switch">
+              <input type="checkbox" id="s-haslunchbreak" checked />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="s-lunchstart">เริ่มพักเที่ยง</label>
+            <input type="time" id="s-lunchstart" value="12:00" />
+          </div>
+          <div class="field">
+            <label for="s-lunchend">สิ้นสุดพักเที่ยง</label>
+            <input type="time" id="s-lunchend" value="13:00" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="switch-row" for="s-hasmandatoryot">
+            <span>มี OT บังคับ</span>
+            <span class="switch">
+              <input type="checkbox" id="s-hasmandatoryot" checked />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
         </div>
         <div class="field">
-          <label for="s-normalend">เวลาสิ้นสุดงานปกติ</label>
-          <input type="time" id="s-normalend" value="17:00" />
+          <label for="s-mandatoryotend">เวลาสิ้นสุด OT บังคับ</label>
+          <input type="time" id="s-mandatoryotend" value="18:00" />
         </div>
-      </div>
 
-      <div class="field">
-        <label class="switch-row" for="s-notifylateout">
-          <span>แจ้งเตือนถ้ายังไม่บันทึกเวลาออกงาน (15 นาทีหลังเวลาเลิกงาน)</span>
-          <span class="switch">
-            <input type="checkbox" id="s-notifylateout" />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-        <p class="hint">ต้องเปิด Push notification ด้านบนก่อน ถึงจะได้รับการแจ้งเตือนนี้</p>
-      </div>
-
-      <div class="field">
-        <label class="switch-row" for="s-haslunchbreak">
-          <span>มีพักเที่ยง</span>
-          <span class="switch">
-            <input type="checkbox" id="s-haslunchbreak" checked />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-      </div>
-      <div class="field-row">
         <div class="field">
-          <label for="s-lunchstart">เริ่มพักเที่ยง</label>
-          <input type="time" id="s-lunchstart" value="12:00" />
+          <label class="switch-row" for="s-haseveningbreak">
+            <span>มีพักเย็น</span>
+            <span class="switch">
+              <input type="checkbox" id="s-haseveningbreak" checked />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
         </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="s-eveningbreakstart">เริ่มพักเย็น</label>
+            <input type="time" id="s-eveningbreakstart" value="18:00" />
+          </div>
+          <div class="field">
+            <label for="s-eveningbreakend">สิ้นสุดพักเย็น</label>
+            <input type="time" id="s-eveningbreakend" value="18:30" />
+          </div>
+        </div>
+
+        <h2 class="card__title card__title--spaced">อัตรา OT</h2>
         <div class="field">
-          <label for="s-lunchend">สิ้นสุดพักเที่ยง</label>
-          <input type="time" id="s-lunchend" value="13:00" />
+          <label for="s-otmultiplier">อัตรา OT วันธรรมดา เริ่มต้น (เท่า)</label>
+          <div class="preset-row">
+            <button type="button" class="preset-btn" data-target="weekday" data-preset="1.5">1.5x</button>
+            <button type="button" class="preset-btn" data-target="weekday" data-preset="2">2x</button>
+            <button type="button" class="preset-btn" data-target="weekday" data-preset="3">3x</button>
+          </div>
+          <input type="number" id="s-otmultiplier" min="0" step="0.1" value="1.5" inputmode="decimal" />
         </div>
-      </div>
 
-      <div class="field">
-        <label class="switch-row" for="s-hasmandatoryot">
-          <span>มี OT บังคับ</span>
-          <span class="switch">
-            <input type="checkbox" id="s-hasmandatoryot" checked />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-      </div>
-      <div class="field">
-        <label for="s-mandatoryotend">เวลาสิ้นสุด OT บังคับ</label>
-        <input type="time" id="s-mandatoryotend" value="18:00" />
-      </div>
-
-      <div class="field">
-        <label class="switch-row" for="s-haseveningbreak">
-          <span>มีพักเย็น</span>
-          <span class="switch">
-            <input type="checkbox" id="s-haseveningbreak" checked />
-            <span class="switch__track"><span class="switch__thumb"></span></span>
-          </span>
-        </label>
-      </div>
-      <div class="field-row">
         <div class="field">
-          <label for="s-eveningbreakstart">เริ่มพักเย็น</label>
-          <input type="time" id="s-eveningbreakstart" value="18:00" />
+          <label for="s-weekendotmultiplier">อัตรา OT วันเสาร์-อาทิตย์ เริ่มต้น (เท่า)</label>
+          <div class="preset-row">
+            <button type="button" class="preset-btn" data-target="weekend" data-preset="1.5">1.5x</button>
+            <button type="button" class="preset-btn" data-target="weekend" data-preset="2">2x</button>
+            <button type="button" class="preset-btn" data-target="weekend" data-preset="3">3x</button>
+          </div>
+          <input type="number" id="s-weekendotmultiplier" min="0" step="0.1" value="1.5" inputmode="decimal" />
+          <p class="hint">ใช้กับวันที่ตกวันเสาร์หรืออาทิตย์เท่านั้น ชั่วโมงทำงานทั้งหมด (หักพักเที่ยง) นับเป็น OT ทั้งหมด — เปลี่ยนอัตราเฉพาะวันได้จากดรอปดาวน์ "อัตรา OT วันนี้" ในหน้าบันทึก</p>
         </div>
+      </div>
+
+      <div class="card form-card">
+        <h2 class="card__title">การแจ้งเตือน</h2>
         <div class="field">
-          <label for="s-eveningbreakend">สิ้นสุดพักเย็น</label>
-          <input type="time" id="s-eveningbreakend" value="18:30" />
+          <label class="switch-row" id="pushRow" for="s-pushenabled">
+            <span>เปิดการแจ้งเตือนแบบ Push (ทำงานแม้ปิดแอป)</span>
+            <span class="switch">
+              <input type="checkbox" id="s-pushenabled" disabled />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint" id="pushHint">ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว</p>
         </div>
-      </div>
 
-      <h2 class="card__title card__title--spaced">อัตรา OT</h2>
-      <div class="field">
-        <label for="s-otmultiplier">อัตรา OT วันธรรมดา เริ่มต้น (เท่า)</label>
-        <div class="preset-row">
-          <button type="button" class="preset-btn" data-target="weekday" data-preset="1.5">1.5x</button>
-          <button type="button" class="preset-btn" data-target="weekday" data-preset="2">2x</button>
-          <button type="button" class="preset-btn" data-target="weekday" data-preset="3">3x</button>
+        <div class="field">
+          <label class="switch-row" for="s-notifylateout">
+            <span>แจ้งเตือนถ้ายังไม่บันทึกเวลาออกงาน (15 นาทีหลังเวลาเลิกงาน)</span>
+            <span class="switch">
+              <input type="checkbox" id="s-notifylateout" />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint">ต้องเปิด Push notification ด้านบนก่อน ถึงจะได้รับการแจ้งเตือนนี้</p>
         </div>
-        <input type="number" id="s-otmultiplier" min="0" step="0.1" value="1.5" inputmode="decimal" />
-      </div>
 
-      <div class="field">
-        <label for="s-weekendotmultiplier">อัตรา OT วันเสาร์-อาทิตย์ เริ่มต้น (เท่า)</label>
-        <div class="preset-row">
-          <button type="button" class="preset-btn" data-target="weekend" data-preset="1.5">1.5x</button>
-          <button type="button" class="preset-btn" data-target="weekend" data-preset="2">2x</button>
-          <button type="button" class="preset-btn" data-target="weekend" data-preset="3">3x</button>
-        </div>
-        <input type="number" id="s-weekendotmultiplier" min="0" step="0.1" value="1.5" inputmode="decimal" />
-        <p class="hint">ใช้กับวันที่ตกวันเสาร์หรืออาทิตย์เท่านั้น ชั่วโมงทำงานทั้งหมด (หักพักเที่ยง) นับเป็น OT ทั้งหมด — เปลี่ยนอัตราเฉพาะวันได้จากดรอปดาวน์ "อัตรา OT วันนี้" ในหน้าบันทึก</p>
+        <div class="save-indicator" id="saveIndicator">บันทึกอัตโนมัติแล้ว ✓</div>
       </div>
-
-      <div class="save-indicator" id="saveIndicator">บันทึกอัตโนมัติแล้ว ✓</div>
     </form>
 
     <div class="card form-card">
       <h2 class="card__title">ข้อมูล</h2>
       <p class="hint">ข้อมูลทั้งหมดถูกเก็บไว้ในเครื่องนี้เท่านั้น สำรองข้อมูลไว้เผื่อเปลี่ยนเครื่องหรือย้ายเบราว์เซอร์</p>
       <div class="form-actions form-actions--stack">
-        <button type="button" id="exportBtn" class="btn btn--secondary">⬇️ สำรองข้อมูล (Export)</button>
+        <button type="button" id="exportBtn" class="btn btn--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="สำรองข้อมูล"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg> สำรองข้อมูล (Export)</button>
         <label class="btn btn--secondary file-btn">
-          ⬆️ นำเข้าข้อมูล (Import)
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="นำเข้าข้อมูล"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg> นำเข้าข้อมูล (Import)
           <input type="file" id="importInput" accept="application/json" class="hidden" />
         </label>
-        <button type="button" id="clearBtn" class="btn btn--danger">🗑️ ล้างข้อมูลทั้งหมด</button>
+        <button type="button" id="clearBtn" class="btn btn--danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ล้างข้อมูล"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg> ล้างข้อมูลทั้งหมด</button>
       </div>
     </div>
 

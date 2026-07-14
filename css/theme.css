@@ -1,7 +1,13 @@
 /* ============================================================
    OT Tracker — Color themes
    Switch by setting: document.documentElement.dataset.colorTheme = "ocean"
-   Values: "sunset" (default) | "ocean" | "berry" | "violet"
+   Values: "sunset" (default) | "ocean" | "midnight"
+
+   Overrides the SAME tokens style.css already styles every component
+   with (--series-normal, --series-ot, --status-*, ...) — not a parallel
+   variable set — so switching theme actually recolors buttons, the
+   active tab, entry list figures, the trend chart, the calendar, etc.
+   throughout the whole app, in both light and dark mode.
 
    Uses [data-color-theme] (NOT [data-theme]) — app.js already uses
    the `data-theme` attribute on <html> for dark/light mode
@@ -9,193 +15,62 @@
    here would silently break dark mode, since only one value can
    be set on the attribute at a time.
 
-   Import this file AFTER your existing base CSS so these
-   variables are available to every component.
+   Import this file AFTER style.css so these overrides win.
    ============================================================ */
 
+/* --- Sunset (default): coral primary, teal secondary --- */
 :root,
 :root[data-color-theme="sunset"] {
-  --bg-page: #F5F6FA;
-  --accent-primary: #FF6B4A;
-  --accent-primary-soft: #FFE4DB;
-  --accent-primary-dark: #D8481F;
-  --accent-secondary: #00B8A9;
-  --accent-secondary-soft: #D6F5EE;
-  --accent-secondary-dark: #00806F;
-  --accent-tertiary: #FFB238;
-  --accent-tertiary-soft: #FFF0D9;
-  --accent-tertiary-dark: #B87109;
+  --series-normal:      #FF6B4A;
+  --series-normal-soft: #FFE4DB;
+  --series-ot:          #00A896;
+  --series-ot-soft:     #D6F5EE;
+}
+:root[data-color-theme="sunset"][data-theme="dark"] {
+  --series-normal:      #FF9478;
+  --series-normal-soft: #5A2A1F;
+  --series-ot:          #3DE0C8;
+  --series-ot-soft:     #0F4A40;
 }
 
+/* --- Ocean: steel blue primary, amber secondary --- */
 :root[data-color-theme="ocean"] {
-  --bg-page: #F5F7FB;
-  --accent-primary: #2F6FB0;
-  --accent-primary-soft: #DCE9F5;
-  --accent-primary-dark: #1F4E80;
-  --accent-secondary: #F5A623;
-  --accent-secondary-soft: #FDEBCF;
-  --accent-secondary-dark: #A56B0E;
-  --accent-tertiary: #6FAED9;
-  --accent-tertiary-soft: #E4F1F9;
-  --accent-tertiary-dark: #2E6E93;
+  --series-normal:      #2F6FB0;
+  --series-normal-soft: #DCE9F5;
+  --series-ot:          #B8770F;
+  --series-ot-soft:     #FDEBCF;
+}
+:root[data-color-theme="ocean"][data-theme="dark"] {
+  --series-normal:      #6FA8E0;
+  --series-normal-soft: #163A5C;
+  --series-ot:          #FFC24D;
+  --series-ot-soft:     #4A3208;
 }
 
-:root[data-color-theme="berry"] {
-  --bg-page: #FAF6F9;
-  --accent-primary: #E5527F;
-  --accent-primary-soft: #FBDCE6;
-  --accent-primary-dark: #A62E52;
-  --accent-secondary: #2BC7A0;
-  --accent-secondary-soft: #D8F5EC;
-  --accent-secondary-dark: #17836A;
-  --accent-tertiary: #F2A6BF;
-  --accent-tertiary-soft: #FCE8EF;
-  --accent-tertiary-dark: #B85575;
+/* --- Midnight: warm plum primary, mint secondary — the "premium" pick.
+   Was indigo (#5147E5), which read almost identical to Ocean's steel blue
+   at a glance, especially in dark mode. Shifted warmer (more red, less
+   blue) toward plum/mauve so the two themes are clearly distinct, while
+   keeping saturation muted so it doesn't compete with Ocean's amber. --- */
+:root[data-color-theme="midnight"] {
+  --series-normal:      #8B5CB0;
+  --series-normal-soft: #F0E2F6;
+  --series-ot:          #0E9F76;
+  --series-ot-soft:     #D7F5EB;
 }
-
-:root[data-color-theme="violet"] {
-  --bg-page: #F7F6FC;
-  --accent-primary: #7C5CFC;
-  --accent-primary-soft: #E8E3FE;
-  --accent-primary-dark: #4E32B8;
-  --accent-secondary: #8BC34A;
-  --accent-secondary-soft: #E6F2D9;
-  --accent-secondary-dark: #547A22;
-  --accent-tertiary: #C4B5FD;
-  --accent-tertiary-soft: #F1EDFE;
-  --accent-tertiary-dark: #6A56A8;
-}
-
-/* Destructive action color stays constant across all themes —
-   it is semantic (delete/danger), not a brand accent. */
-:root {
-  --danger: #B23636;
-  --danger-soft: #FBDCDC;
+:root[data-color-theme="midnight"][data-theme="dark"] {
+  --series-normal:      #C79FE0;
+  --series-normal-soft: #3A2350;
+  --series-ot:          #4EDEA3;
+  --series-ot-soft:     #114A38;
 }
 
 /* ============================================================
-   Components
-   ============================================================ */
-
-/* --- Summary stat cards (รายได้รวม, ชั่วโมง OT, ฯลฯ) --- */
-.stat-card {
-  background: var(--surface-1, #FFFFFF);
-  border-radius: 16px;
-  padding: 16px;
-}
-.stat-card__label {
-  font-size: 12px;
-  color: var(--text-secondary, #6B7080);
-}
-.stat-card__value {
-  font-family: "Space Grotesk", sans-serif;
-  font-weight: 700;
-  color: var(--accent-primary);
-}
-.stat-card--secondary .stat-card__value {
-  color: var(--accent-secondary);
-  font-size: 20px;
-}
-
-/* --- "เพิ่มขึ้น 12% จากเดือนก่อน" comparison badge ---
-   Reuses the existing changeBadgeHtml() output in app.js —
-   just point its classes at these theme-aware colors. */
-.badge-change {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 12px;
-  font-weight: 500;
-}
-.badge-change--up {
-  color: var(--accent-secondary-dark);
-}
-.badge-change--down {
-  color: var(--danger);
-}
-.badge-change--flat,
-.badge-change--new {
-  color: var(--text-secondary, #6B7080);
-}
-
-/* --- Tonal (duotone) icon chips: tab bar + row actions --- */
-.icon-tonal {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-.icon-tonal svg {
-  width: 20px;
-  height: 20px;
-}
-.icon-tonal--primary   { background: var(--accent-primary-soft);   color: var(--accent-primary-dark); }
-.icon-tonal--secondary { background: var(--accent-secondary-soft); color: var(--accent-secondary-dark); }
-.icon-tonal--tertiary  { background: var(--accent-tertiary-soft);  color: var(--accent-tertiary-dark); }
-.icon-tonal--danger    { background: var(--danger-soft);           color: var(--danger); }
-
-/* Smaller variant for row actions (edit / delete on a list item) */
-.icon-tonal--sm {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-}
-.icon-tonal--sm svg {
-  width: 16px;
-  height: 16px;
-}
-
-/* Existing .icon-btn (style.css) already draws its own 32x32 box —
-   drop that so it doesn't double up behind the icon-tonal chip */
-.icon-btn--tonal {
-  background: none;
-  width: auto;
-  height: auto;
-  padding: 0;
-}
-
-/* --- Primary button (บันทึกเวลา, ยืนยัน, ฯลฯ) --- */
-.btn-primary {
-  background: var(--accent-primary);
-  color: #FFFFFF;
-  border: none;
-  border-radius: 12px;
-  padding: 13px;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
-}
-.btn-primary:active {
-  transform: scale(0.98);
-}
-
-/* --- Progress bar (เป้าหมายเงิน OT) --- */
-.goal-progress {
-  height: 10px;
-  background: var(--border, #F0F1F5);
-  border-radius: 8px;
-  overflow: hidden;
-  display: flex;
-}
-.goal-progress__fill--primary {
-  background: var(--accent-primary);
-}
-.goal-progress__fill--tertiary {
-  background: var(--accent-tertiary);
-}
-
-/* ============================================================
-   Theme picker (settings page)
+   Theme picker (header popover)
    ============================================================ */
 .theme-swatch {
-  width: 48px;
-  height: 48px;
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
   overflow: hidden;
   display: flex;
@@ -205,12 +80,18 @@
   cursor: pointer;
   background: none;
   appearance: none;
+  transition: border-color .15s ease, transform .1s ease;
 }
+.theme-swatch:active { transform: scale(0.94); }
 .theme-swatch.is-active {
-  border-color: var(--accent-primary);
+  border-color: var(--series-normal);
 }
 .theme-swatch__half {
   width: 50%;
+  border-radius: 999px 0 0 999px;
+}
+.theme-swatch__half + .theme-swatch__half {
+  border-radius: 0 999px 999px 0;
 }
 .theme-swatch__caption {
   font-size: 10px;
@@ -221,15 +102,72 @@
 .theme-swatch.is-active + .theme-swatch__caption,
 .theme-swatch.is-active ~ .theme-swatch__caption {
   color: var(--text-primary, #1B1F2A);
-  font-weight: 500;
+  font-weight: 700;
 }
 
 /* ============================================================
-   Dark mode interaction
-   ============================================================
-   app.js sets [data-theme="dark"|"light"] on <html> for dark
-   mode, independent of [data-color-theme] here — the two combine
-   via normal CSS cascade (e.g. :root[data-theme="dark"][data-color-theme="ocean"]
-   for per-theme dark-mode tweaks) without fighting over the same
-   attribute.
+   Background-style picker (Flat / Gradient / Glass) — header popover
    ============================================================ */
+.bgstyle-swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  border: 2px solid transparent;
+  padding: 2px;
+  box-sizing: border-box;
+  cursor: pointer;
+  appearance: none;
+  background-color: var(--page);
+  transition: border-color .15s ease, transform .1s ease;
+}
+.bgstyle-swatch:active { transform: scale(0.94); }
+.bgstyle-swatch.is-active { border-color: var(--series-normal); }
+.bgstyle-swatch[data-bg-style-option="flat"] {
+  background-image: none;
+  box-shadow: none;
+}
+.bgstyle-swatch[data-bg-style-option="gradient"] {
+  background-image: linear-gradient(135deg, var(--series-normal), var(--series-ot));
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--series-normal) 35%, transparent);
+}
+.bgstyle-swatch[data-bg-style-option="glass"] {
+  background-image: linear-gradient(135deg, color-mix(in srgb, var(--series-normal) 55%, white), color-mix(in srgb, var(--series-ot) 55%, white));
+  box-shadow: 0 3px 10px color-mix(in srgb, var(--series-normal) 30%, transparent);
+  border-color: rgba(255,255,255,0.5);
+  backdrop-filter: blur(2px);
+}
+.bgstyle-swatch.is-active[data-bg-style-option] { border-color: var(--series-normal); }
+
+/* ============================================================
+   Dark mode: extra glow polish (gradient/glass background styles only)
+   ============================================================
+   The structural "background style" (flat / gradient / glass) lives in
+   css/style.css, driven by [data-bg-style] and working in BOTH light
+   and dark mode. This block is just the dark-mode-only finishing touch
+   on top of that — glowing text/bars read as gradient-y richness on a
+   dark surface but as noise on a light one, and flat style opts out of
+   all glow by design — so it stays gated to dark + non-flat here.
+   ============================================================ */
+:root[data-theme="dark"]:not([data-bg-style="flat"]) .hero-stat__value {
+  background: linear-gradient(135deg, #fff 0%, var(--series-normal) 60%, var(--series-normal) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 24px color-mix(in srgb, var(--series-normal) 35%, transparent);
+}
+:root[data-theme="dark"]:not([data-bg-style="flat"]) .hero-stat--ot .hero-stat__value {
+  background: linear-gradient(135deg, #fff 0%, var(--series-ot) 60%, var(--series-ot) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 24px color-mix(in srgb, var(--series-ot) 35%, transparent);
+}
+
+:root[data-theme="dark"]:not([data-bg-style="flat"]) .goal-progress__bar-fill {
+  box-shadow: 0 0 12px color-mix(in srgb, var(--series-ot) 50%, transparent);
+}
+
+:root[data-theme="dark"]:not([data-bg-style="flat"]) .trend-col.is-current .trend-col__bar,
+:root[data-theme="dark"]:not([data-bg-style="flat"]) .trend-col__bar.is-active {
+  box-shadow: 0 0 16px color-mix(in srgb, var(--series-normal) 45%, transparent);
+}
