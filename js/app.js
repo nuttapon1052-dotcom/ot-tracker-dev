@@ -1407,9 +1407,73 @@
       };
     });
 
-    var ws = XLSX.utils.json_to_sheet(rows);
+    // Sheet 1: รายละเอียดรายวัน (ของเดิม)
+    var wsDetail = XLSX.utils.json_to_sheet(rows);
+
+    // Sheet 2: สรุปช่วงที่ export
+    var rangeAgg = aggregate(entries, state.settings);
+    var summaryRows = [
+      { "รายการ": "ช่วงที่ export", "ค่า": startISO + " ถึง " + endISO },
+      { "รายการ": "จำนวนวันที่บันทึก", "ค่า": rangeAgg.count },
+      { "รายการ": "ชั่วโมงทำงานปกติ", "ค่า": Math.round(rangeAgg.normalHours * 100) / 100 },
+      { "รายการ": "ชั่วโมง OT รวม", "ค่า": Math.round(rangeAgg.otHours * 100) / 100 },
+      { "รายการ": "  - OT วันธรรมดา", "ค่า": Math.round(rangeAgg.otHoursWeekday * 100) / 100 },
+      { "รายการ": "  - OT วันหยุด", "ค่า": Math.round(rangeAgg.otHoursWeekend * 100) / 100 },
+      { "รายการ": "เงิน OT รวม", "ค่า": Math.round(rangeAgg.otPay * 100) / 100 },
+      { "รายการ": "รายได้รวม (ปกติ+OT)", "ค่า": Math.round(rangeAgg.totalPay * 100) / 100 }
+    ];
+    var wsSummary = XLSX.utils.json_to_sheet(summaryRows);
+    wsSummary["!cols"] = [{ wch: 24 }, { wch: 20 }];
+
+    // Sheet 3: เปรียบเทียบ 12 เดือนล่าสุด (นับถอยจากเดือนสุดท้ายที่ export)
+    var endDate = new Date(endISO);
+    var trendMonths = [];
+    for (var i = 11; i >= 0; i--) {
+      var d = new Date(endDate.getFullYear(), endDate.getMonth() - i, 1);
+      var agg = monthAgg(d.getFullYear(), d.getMonth());
+      trendMonths.push({
+        d: d,
+        normalHours: Math.round(agg.normalHours * 100) / 100,
+        otHours: Math.round(agg.otHours * 100) / 100,
+        otPay: Math.round(agg.otPay * 100) / 100,
+        totalPay: Math.round(agg.totalPay * 100) / 100
+      });
+    }
+    var maxOt = Math.max.apply(null, trendMonths.map(function (m) { return m.otHours; }).concat([1]));
+    var BAR_WIDTH = 20;
+    var compareRows = trendMonths.map(function (m) {
+      var barLen = Math.round((m.otHours / maxOt) * BAR_WIDTH);
+      return {
+        "เดือน": dfMonthYear.format(m.d),
+        "ชั่วโมงปกติ": m.normalHours,
+        "ชั่วโมง OT": m.otHours,
+        "เงิน OT": m.otPay,
+        "รายได้รวม": m.totalPay,
+        "กราฟ OT": "█".repeat(barLen) + " " + m.otHours + " ชม."
+      };
+    });
+    var totals = trendMonths.reduce(function (acc, m) {
+      acc.normalHours += m.normalHours;
+      acc.otHours += m.otHours;
+      acc.otPay += m.otPay;
+      acc.totalPay += m.totalPay;
+      return acc;
+    }, { normalHours: 0, otHours: 0, otPay: 0, totalPay: 0 });
+    compareRows.push({
+      "เดือน": "รวม 12 เดือน",
+      "ชั่วโมงปกติ": Math.round(totals.normalHours * 100) / 100,
+      "ชั่วโมง OT": Math.round(totals.otHours * 100) / 100,
+      "เงิน OT": Math.round(totals.otPay * 100) / 100,
+      "รายได้รวม": Math.round(totals.totalPay * 100) / 100,
+      "กราฟ OT": ""
+    });
+    var wsCompare = XLSX.utils.json_to_sheet(compareRows);
+    wsCompare["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 28 }];
+
     var wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "OT");
+    XLSX.utils.book_append_sheet(wb, wsSummary, "สรุป");
+    XLSX.utils.book_append_sheet(wb, wsCompare, "เปรียบเทียบ 12 เดือน");
+    XLSX.utils.book_append_sheet(wb, wsDetail, "รายละเอียด");
     XLSX.writeFile(wb, "ot-tracker-" + filenameStamp + ".xlsx");
     showToast("Export Excel แล้ว ✓");
     closeExportModal();

@@ -13,8 +13,10 @@
 - Project ref: tnbxahwxiocgmabrajpz
 - URL: https://tnbxahwxiocgmabrajpz.supabase.co
 - ใช้ Auth (Google OAuth), Database (PostgreSQL), Edge Functions
-- ตารางที่มี: ot_entries, ot_settings, work_notes, push_subscriptions, todos
+- ตารางที่มี: ot_entries, ot_settings, work_notes (มีคอลัมน์ reminder_sent สำหรับแจ้งเตือนเหตุการณ์), push_subscriptions, todos
 - ผู้ใช้ **ไม่ได้ใช้ supabase db push** — ต้อง copy โค้ด SQL ไปรันเองใน Supabase SQL Editor เสมอ
+- Edge Functions ที่มี: `send-push-reminders`, `send-event-reminders`, `send-push-test` (ไว้ทดสอบ push)
+- **Auth ของ pg_cron → Edge Function**: ใช้ custom header `X-Reminder-Auth` กับ secret `REMINDER_AUTH_KEY` (ไม่ใช่ service_role key ผ่าน Authorization header อีกต่อไป เพราะ Supabase gateway จะดัก Authorization header และปฏิเสธค่าที่ไม่ใช่ JWT ก่อนโค้ดจะรันด้วยซ้ำ) — `verify_jwt = false` ถูกตั้งไว้ในทั้งสอง function นี้ใน `supabase/config.toml` เพราะ auth เช็คเองในโค้ดแล้ว
 
 ## ฟีเจอร์ที่ทำเสร็จแล้ว
 - Google Login ผ่าน Supabase Auth
@@ -39,8 +41,10 @@
 - **Service Worker cache**: ทุกครั้งที่ push โค้ดใหม่ ต้องเตือนผู้ใช้ให้ hard refresh (Ctrl+Shift+R) หรือใช้ incognito ไม่งั้นจะเห็นโค้ดเก่า
 - **ห้ามขอ secret key**: Service Role Key, VAPID Private Key, Access Token — ห้ามขอให้ผู้ใช้ส่งมาให้ดู ให้ผู้ใช้รันเองในเทอร์มินัลเท่านั้น
 - **Brave browser บล็อก Push API** — ถ้าทดสอบ push ให้ใช้ Chrome/Edge/Safari แทน
+- **`.local-only/`**: ใช้เก็บ SQL แบบ one-off ที่ต้องรันครั้งเดียวเอง (เช่น ตั้งค่า secret ใน Vault) อยู่ใน `.gitignore` แล้ว ห้าม commit ไฟล์ในโฟลเดอร์นี้
 
 ## คำสั่งที่ใช้บ่อย
 - Deploy Edge Function: `! supabase functions deploy <function-name>`
 - ตั้งค่า secret: `! supabase secrets set KEY=value`
 - Push ขึ้น GitHub: `! git add . && git commit -m "message" && git push`
+- รัน Playwright tests: `! npx playwright test` (มี test อยู่ใน `tests/entry.spec.js`)
