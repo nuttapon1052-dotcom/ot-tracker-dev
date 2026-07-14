@@ -12,6 +12,11 @@ const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+// key แยกต่างหากสำหรับตรวจสอบสิทธิ์เรียก endpoint นี้ (pg_cron ใช้ค่านี้)
+// ไม่ใช้ SUPABASE_SERVICE_ROLE_KEY ตรงนี้อีกต่อไป เพื่อไม่ให้ service role key
+// หลุดไปอยู่ในที่ที่ไม่จำเป็น
+const REMINDER_AUTH_KEY = Deno.env.get("REMINDER_AUTH_KEY");
+
 // ค่าเริ่มต้น timezone เมื่อ user ยังไม่เคยตั้งไว้ใน ot_settings.timezone
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
@@ -86,11 +91,17 @@ Deno.serve(async (req) => {
   }
 
   // ป้องกันไม่ให้ใครก็ได้ (เช่น ผู้ถือ anon key ฝั่งหน้าเว็บ) มายิง endpoint
-  // นี้เพื่อสั่งส่ง push ให้ user ทุกคนได้ตามใจชอบ - ต้องมาจาก service_role
-  // key เท่านั้น (pg_cron เรียกด้วย service_role key ตามคำแนะนำท้ายไฟล์)
-  const authHeader = req.headers.get("Authorization") ?? "";
-  const bearerToken = authHeader.replace(/^Bearer\s+/i, "");
-  if (!SUPABASE_SERVICE_ROLE_KEY || bearerToken !== SUPABASE_SERVICE_ROLE_KEY) {
+  // นี้เพื่อสั่งส่ง push ให้ user ทุกคนได้ตามใจชอบ (pg_cron เรียกด้วย
+  // REMINDER_AUTH_KEY ตามคำแนะนำท้ายไฟล์)
+  //
+  // ใช้ header ชื่อเอง "X-Reminder-Auth" แทน "Authorization" เพราะ Supabase
+  // gateway จะตรวจสอบค่าใน Authorization header เองก่อนโค้ดเราจะได้ทำงานเสมอ
+  // (ไม่ว่า verify_jwt จะปิดไว้หรือไม่) แล้ว reject ค่าที่ไม่ใช่ JWT/apikey ที่
+  // ถูกต้อง ทำให้ REMINDER_AUTH_KEY (เป็น plain string ไม่ใช่ JWT) ผ่านไม่ถึง
+  // โค้ดเราเลย ตาม Supabase docs endpoint ที่ทำ custom auth เองไม่ควรใช้
+  // Authorization header เลย
+  const reminderAuthHeader = req.headers.get("X-Reminder-Auth") ?? "";
+  if (!REMINDER_AUTH_KEY || reminderAuthHeader !== REMINDER_AUTH_KEY) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
 
@@ -243,15 +254,16 @@ Deno.serve(async (req) => {
 /* วิธีทดสอบ (local):
 
   1. รัน `supabase start`
-  2. เรียกด้วย curl พร้อมแนบ service_role key (ดู `supabase status` เพื่อดูคีย์):
+  2. เรียกด้วย curl พร้อมแนบ REMINDER_AUTH_KEY ใน header ชื่อ X-Reminder-Auth:
 
   curl -i --location --request POST \
     'http://127.0.0.1:54321/functions/v1/send-push-reminders' \
-    --header 'Authorization: Bearer <SERVICE_ROLE_KEY>'
+    --header 'X-Reminder-Auth: <REMINDER_AUTH_KEY>'
 
-  ต้องแนบ service_role key เท่านั้น เพราะฟังก์ชันนี้เช็ค Authorization header
-  เองภายใน (ดูโค้ดด้านบน) โดยไม่สนใจว่า verify_jwt จะผ่านหรือไม่ - ป้องกันไม่ให้
-  ใครก็ได้ที่ถือ anon key มายิงส่ง push แทน user อื่นได้
+  ต้องแนบ REMINDER_AUTH_KEY ผ่าน X-Reminder-Auth เท่านั้น เพราะฟังก์ชันนี้เช็ค
+  header นี้เองภายใน (ดูโค้ดด้านบน) โดยไม่สนใจว่า verify_jwt จะผ่านหรือไม่ -
+  ป้องกันไม่ให้ใครก็ได้ที่ถือ anon key มายิงส่ง push แทน user อื่นได้ (ไม่ใช้
+  Authorization header เพราะ Supabase gateway จะดักตรวจค่านั้นเองก่อนถึงโค้ดเรา)
 
   ดูวิธีตั้งค่า pg_cron ให้เรียกฟังก์ชันนี้อัตโนมัติทุก 15 นาทีได้ที่
   supabase/migrations/20260712000000_push_reminders.sql

@@ -15,6 +15,9 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const VAPID_PUBLIC_KEY = Deno.env.get("VAPID_PUBLIC_KEY")!;
 const VAPID_PRIVATE_KEY = Deno.env.get("VAPID_PRIVATE_KEY")!;
 
+// key แยกต่างหากสำหรับตรวจสอบสิทธิ์เรียก endpoint นี้ (pg_cron ใช้ค่านี้)
+const REMINDER_AUTH_KEY = Deno.env.get("REMINDER_AUTH_KEY")!;
+
 const VAPID_SUBJECT = "mailto:test@example.com";
 
 webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -39,11 +42,14 @@ function getBangkokTomorrowDate(): string {
 
 Deno.serve(async (req) => {
   try {
-    // Auth check: ต้องมี service role key ใน Authorization header
+    // Auth check: ต้องมี REMINDER_AUTH_KEY ใน header ชื่อ X-Reminder-Auth
     // กันคนนอกยิง URL เข้ามาสั่งส่ง push เอง
-    const authHeader = req.headers.get("Authorization") ?? "";
-    const expected = `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`;
-    if (authHeader !== expected) {
+    //
+    // ใช้ header ชื่อเอง "X-Reminder-Auth" แทน "Authorization" เพราะ Supabase
+    // gateway ตรวจสอบค่าใน Authorization header เองก่อนถึงโค้ดเราเสมอ (ไม่ว่า
+    // verify_jwt จะปิดไว้หรือไม่) แล้ว reject ค่าที่ไม่ใช่ JWT/apikey ที่ถูกต้อง
+    const reminderAuthHeader = req.headers.get("X-Reminder-Auth") ?? "";
+    if (reminderAuthHeader !== REMINDER_AUTH_KEY) {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
 

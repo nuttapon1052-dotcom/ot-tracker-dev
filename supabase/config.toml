@@ -1,4 +1,3 @@
-
 [functions.send-push-test]
 enabled = true
 verify_jwt = false
@@ -12,9 +11,17 @@ entrypoint = "./functions/send-push-test/index.ts"
 
 [functions.send-push-reminders]
 enabled = true
-# ต้องแนบ Authorization: Bearer <JWT ที่ valid> มาด้วย (service_role key ก็คือ
-# JWT ที่ valid) ฟังก์ชันเองก็เช็คซ้ำอีกชั้นว่าต้องเป็น service_role key เป๊ะๆ
-# เท่านั้น ไม่ใช่แค่ JWT ใดๆ (ดูรายละเอียดใน index.ts)
-verify_jwt = true
+# pg_cron เรียกด้วย REMINDER_AUTH_KEY (plain string ไม่ใช่ JWT) แนบผ่าน header
+# ชื่อเอง X-Reminder-Auth (ไม่ใช้ Authorization เพราะ Supabase gateway จะดัก
+# ตรวจค่านั้นเองก่อนถึงโค้ดเราเสมอ ไม่ว่า verify_jwt จะปิดไว้หรือไม่ แล้ว
+# reject ค่าที่ไม่ใช่ JWT/apikey ที่ถูกต้องทันที) ฟังก์ชันเช็ค key นี้เองภายใน
+# (ดูรายละเอียดใน index.ts) จึงต้องปิด verify_jwt ไว้ด้วย
+verify_jwt = false
 import_map = "./functions/send-push-reminders/deno.json"
 entrypoint = "./functions/send-push-reminders/index.ts"
+
+[functions.send-event-reminders]
+enabled = true
+# เหตุผลเดียวกับ send-push-reminders ด้านบน - ใช้ REMINDER_AUTH_KEY ไม่ใช่ JWT
+verify_jwt = false
+entrypoint = "./functions/send-event-reminders/index.ts"
