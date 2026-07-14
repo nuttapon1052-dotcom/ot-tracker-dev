@@ -11,6 +11,9 @@
       ? saved
       : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light");
     document.documentElement.setAttribute("data-theme", theme);
+
+    var savedColorTheme = localStorage.getItem("ot-tracker-color-theme");
+    document.documentElement.setAttribute("data-color-theme", savedColorTheme || "sunset");
   } catch (e) {}
 })();
 </script>
@@ -30,6 +33,7 @@
 <link rel="icon" href="icons/icon-192.png" />
 
 <link rel="stylesheet" href="css/style.css" />
+<link rel="stylesheet" href="css/theme.css" />
 </head>
 <body>
 
@@ -343,6 +347,41 @@
         </button>
       </div>
 
+      <h2 class="card__title card__title--spaced">ธีมสี</h2>
+      <div class="field">
+        <p class="hint">เลือกโทนสีของแอป เปลี่ยนได้ตลอดเวลา</p>
+        <div class="theme-picker" id="themePicker" style="display:flex; gap:14px; margin-top:12px; flex-wrap:wrap;">
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="sunset" aria-label="ธีม Sunset Growth">
+              <span class="theme-swatch__half" style="background:#FF6B4A"></span>
+              <span class="theme-swatch__half" style="background:#00B8A9"></span>
+            </button>
+            <div class="theme-swatch__caption">Sunset<br/>Growth</div>
+          </div>
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="ocean" aria-label="ธีม Ocean Gold">
+              <span class="theme-swatch__half" style="background:#2F6FB0"></span>
+              <span class="theme-swatch__half" style="background:#F5A623"></span>
+            </button>
+            <div class="theme-swatch__caption">Ocean<br/>Gold</div>
+          </div>
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="berry" aria-label="ธีม Berry Mint">
+              <span class="theme-swatch__half" style="background:#E5527F"></span>
+              <span class="theme-swatch__half" style="background:#2BC7A0"></span>
+            </button>
+            <div class="theme-swatch__caption">Berry<br/>Mint</div>
+          </div>
+          <div>
+            <button type="button" class="theme-swatch" data-color-theme="violet" aria-label="ธีม Violet Pop">
+              <span class="theme-swatch__half" style="background:#7C5CFC"></span>
+              <span class="theme-swatch__half" style="background:#8BC34A"></span>
+            </button>
+            <div class="theme-swatch__caption">Violet<br/>Pop</div>
+          </div>
+        </div>
+      </div>
+
       <h2 class="card__title card__title--spaced">เงินเดือน &amp; ค่าแรง</h2>
 
       <div class="field">
@@ -535,13 +574,13 @@
 
 <nav class="tabbar" id="tabbar">
   <button class="tabbar__btn is-active" data-view="entry">
-    <span class="tabbar__icon">🕐</span><span>บันทึกเวลา</span>
+    <span class="icon-tonal icon-tonal--primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="บันทึกเวลา"><circle cx="12" cy="12" r="9"/><line x1="12" y1="12" x2="12" y2="7"/><line x1="12" y1="12" x2="15.5" y2="9.5"/></svg></span><span>บันทึกเวลา</span>
   </button>
   <button class="tabbar__btn" data-view="summary">
-    <span class="tabbar__icon">📊</span><span>สรุป</span>
+    <span class="icon-tonal icon-tonal--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="สรุป"><rect x="3" y="13" width="4" height="7" rx="1"/><rect x="10" y="9" width="4" height="11" rx="1"/><rect x="17" y="4" width="4" height="16" rx="1"/></svg></span><span>สรุป</span>
   </button>
   <button class="tabbar__btn" data-view="settings">
-    <span class="tabbar__icon">⚙️</span><span>ตั้งค่า</span>
+    <span class="icon-tonal icon-tonal--tertiary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ตั้งค่า"><line x1="4" y1="6" x2="20" y2="6"/><circle cx="9" cy="6" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="12" x2="20" y2="12"/><circle cx="16" cy="12" r="2" fill="currentColor" stroke="none"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="11" cy="18" r="2" fill="currentColor" stroke="none"/></svg></span><span>ตั้งค่า</span>
   </button>
 </nav>
 

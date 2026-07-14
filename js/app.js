@@ -699,6 +699,35 @@
   updateMetaThemeColor(currentTheme());
 
   /* ============================================================
+   * Color theme (sunset / ocean / berry / violet)
+   * Separate from dark/light above — uses [data-color-theme] on
+   * <html>, not [data-theme], to avoid clobbering dark mode.
+   * ========================================================== */
+  var COLOR_THEME_KEY = "ot-tracker-color-theme";
+  var themePicker = document.getElementById("themePicker");
+
+  function applyColorTheme(theme) {
+    document.documentElement.setAttribute("data-color-theme", theme);
+    if (themePicker) {
+      Array.prototype.forEach.call(themePicker.querySelectorAll(".theme-swatch"), function (btn) {
+        btn.classList.toggle("is-active", btn.dataset.colorTheme === theme);
+      });
+    }
+  }
+
+  applyColorTheme(localStorage.getItem(COLOR_THEME_KEY) || "sunset");
+
+  if (themePicker) {
+    themePicker.addEventListener("click", function (e) {
+      var btn = e.target.closest(".theme-swatch");
+      if (!btn) return;
+      var theme = btn.dataset.colorTheme;
+      try { localStorage.setItem(COLOR_THEME_KEY, theme); } catch (err) {}
+      applyColorTheme(theme);
+    });
+  }
+
+  /* ============================================================
    * Header title / recorder name
    * ========================================================== */
   function updateHeaderTitle() {
@@ -1127,8 +1156,8 @@
           "</div>" +
           '<div class="entry-item__hours"><b>' + payLine + "</b><br/>" + hoursLine + "</div>" +
           '<div class="entry-item__actions">' +
-            '<button class="icon-btn" data-action="edit" aria-label="แก้ไข">✏️</button>' +
-            '<button class="icon-btn" data-action="delete" aria-label="ลบ">🗑️</button>' +
+            '<button class="icon-btn icon-btn--tonal" data-action="edit" aria-label="แก้ไข"><span class="icon-tonal icon-tonal--sm icon-tonal--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แก้ไข"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/><line x1="13.5" y1="6.5" x2="17.5" y2="10.5"/></svg></span></button>' +
+            '<button class="icon-btn icon-btn--tonal" data-action="delete" aria-label="ลบ"><span class="icon-tonal icon-tonal--sm icon-tonal--danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ลบ"><line x1="4" y1="7" x2="20" y2="7"/><path d="M6 7l1 13a2 2 0 002 2h6a2 2 0 002-2l1-13"/><path d="M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span></button>' +
           "</div>" +
         "</div>"
       );
@@ -1272,8 +1301,8 @@
             descHtml +
           "</div>" +
           '<div class="entry-item__actions">' +
-            '<button class="icon-btn" data-action="edit" aria-label="แก้ไข">✏️</button>' +
-            '<button class="icon-btn" data-action="delete" aria-label="ลบ">🗑️</button>' +
+            '<button class="icon-btn icon-btn--tonal" data-action="edit" aria-label="แก้ไข"><span class="icon-tonal icon-tonal--sm icon-tonal--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แก้ไข"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/><line x1="13.5" y1="6.5" x2="17.5" y2="10.5"/></svg></span></button>' +
+            '<button class="icon-btn icon-btn--tonal" data-action="delete" aria-label="ลบ"><span class="icon-tonal icon-tonal--sm icon-tonal--danger"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ลบ"><line x1="4" y1="7" x2="20" y2="7"/><path d="M6 7l1 13a2 2 0 002 2h6a2 2 0 002-2l1-13"/><path d="M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg></span></button>' +
           "</div>" +
         "</div>"
       );
