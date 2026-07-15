@@ -36,14 +36,17 @@
       defaultTimeOut: "",
       lockTimeIn: false,
       lockTimeOut: false,
-      // late clock-out reminder toggle (server-side Web Push) - persisted
-      // here only; the send-push-reminders Edge Function reads
-      // ot_settings.data.notifyEnabled directly and does all of the actual
-      // "15 min after normalEnd, no time_out yet" scheduling/delivery via
-      // pg_cron (see supabase/functions/send-push-reminders and
-      // supabase/migrations/20260712000000_push_reminders.sql). Requires an
-      // active Push subscription to receive anything (see sNotifyLateOut's
-      // change handler below).
+      // late clock-out reminder toggle (server-side Web Push). This is pure
+      // account-level user intent: it is changed ONLY when the user flips the
+      // sNotifyLateOut switch, and is NEVER cleared by device/subscription
+      // state (doing so was the bug that silently disabled reminders). The
+      // send-push-reminders Edge Function reads ot_settings.data.notifyEnabled
+      // directly and does all the "reminder N min after the effective end
+      // time, no time_out yet" scheduling/delivery via pg_cron (see
+      // supabase/functions/send-push-reminders and
+      // supabase/migrations/20260712000000_push_reminders.sql). Delivery to a
+      // given device still needs that device to hold a push subscription,
+      // which the app self-heals on load (see ensurePushSubscription).
       notifyEnabled: false
     },
     entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
@@ -2511,20 +2514,19 @@
       syncStatus = "syncing";
       syncErrorNotified = false;
       renderSyncStatus();
-      // Wait for the cloud settings pull to land before deciding whether to
-      // (re)subscribe/disable push - otherwise refreshPushToggleState can
-      // race ahead of pullStateFromCloud and persist a stale local
-      // notifyEnabled value that immediately gets clobbered by (or
-      // clobbers) the real cloud value.
-      initialSyncOnLogin(userId).then(refreshPushToggleState);
+      // Wait for the cloud settings pull to land before syncing the
+      // notification UI, so the leave-work toggle reflects the authoritative
+      // cloud notifyEnabled value (not a stale local one) and the push
+      // self-heal runs against the right account.
+      initialSyncOnLogin(userId).then(syncNotificationUI);
     } else if (!userId) {
       currentUserId = null;
       syncStatus = "idle";
       renderSyncStatus();
-      refreshPushToggleState();
+      syncNotificationUI();
     } else {
       renderSyncStatus();
-      refreshPushToggleState();
+      syncNotificationUI();
     }
   }
 
@@ -2593,76 +2595,121 @@
     return outputArray;
   }
 
-  // Keeps the toggle's checked/enabled state and hint text in sync with
-  // reality (support, sign-in state, and the actual subscription).
-  function updatePushToggleAvailability(subscribed) {
-    var supported = pushSupported();
-    var disabled = !supported || !currentUserId;
-    els.sPushEnabled.disabled = disabled;
-    els.pushRow.classList.toggle("is-disabled", disabled);
-    els.sPushEnabled.checked = !disabled && !!subscribed;
-    if (!supported) {
-      els.pushHint.textContent = "อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)";
-    } else if (!currentUserId) {
-      els.pushHint.textContent = "ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    } else if (subscribed) {
-      els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    } else {
-      els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    }
-
-    // The late-clock-out reminder is delivered entirely server-side over
-    // Push, so it can't mean anything without an active subscription - if
-    // Push is confirmed off, force it off and lock the toggle so the UI
-    // never shows it as enabled with nothing to deliver it. (refreshPushToggleState
-    // already tries to silently re-subscribe before calling this with
-    // subscribed=false, so by the time we get here it's a real disable.)
-    if (!subscribed && state.settings.notifyEnabled) {
-      state.settings.notifyEnabled = false;
-      persistSettings();
-      showToast("⚠️ การแจ้งเตือนแบบ Push ถูกปิดไป (อุปกรณ์นี้ไม่มี subscription ที่ใช้งานได้) กรุณาเปิดใหม่อีกครั้ง");
-    }
-    els.sNotifyLateOut.disabled = !subscribed;
-    els.sNotifyLateOut.checked = !!subscribed && !!state.settings.notifyEnabled;
+  function notificationPermission() {
+    return (typeof Notification !== "undefined") ? Notification.permission : "denied";
   }
 
-  // Re-derives the toggle state from the Service Worker's actual
-  // subscription (source of truth) rather than trusting any locally
-  // cached flag - a subscription can be revoked outside the app (e.g.
-  // browser settings, a Service Worker update, or iOS PWA eviction) so
-  // this is called after every relevant change. If no subscription is
-  // found but the user clearly intended push to stay on (notifyEnabled
-  // is true and Notification permission is still granted), try to
-  // silently re-subscribe first instead of immediately disabling
-  // notifications for the whole account - most "it turned itself off"
-  // cases are just the browser dropping the subscription, not the user
-  // opting out.
-  function refreshPushToggleState() {
-    if (!pushSupported()) {
-      updatePushToggleAvailability(false);
+  // Best-effort self-heal of THIS device's push subscription. Runs on every
+  // app load / login so a subscription that the browser silently dropped (a
+  // Service Worker update, iOS PWA eviction, or a benign server-side stale
+  // cleanup) gets recreated automatically - this is what keeps push working
+  // "across days" without the user re-enabling anything. Crucially it NEVER
+  // prompts (only acts when permission is already granted) and NEVER touches
+  // notifyEnabled. Resolves to whether this device now has a subscription.
+  function ensurePushSubscription() {
+    if (!pushSupported()) return Promise.resolve(false);
+    return navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (sub) {
+        if (sub) {
+          // Re-persist to the server so a subscription that was wrongly pruned
+          // there (e.g. one failed send) is restored on the next app open.
+          savePushSubscription(sub).catch(function () {});
+          return true;
+        }
+        if (!currentUserId || notificationPermission() !== "granted") return false;
+        return reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        }).then(function (fresh) {
+          savePushSubscription(fresh).catch(function () {});
+          return true;
+        }).catch(function (err) {
+          console.error("[push] auto-subscribe failed", err);
+          return false;
+        });
+      });
+    }).catch(function () { return false; });
+  }
+
+  // Single source of truth for both notification toggles. It reflects state,
+  // it never decides intent: the leave-work toggle mirrors the cloud-synced
+  // notifyEnabled flag directly and is NEVER cleared here, so losing a device
+  // subscription can no longer silently disable reminders for the account
+  // (the old bug). The Push toggle reflects only whether THIS device is
+  // subscribed, after a self-heal attempt.
+  function syncNotificationUI() {
+    var supported = pushSupported();
+    var loggedIn = !!currentUserId;
+
+    // Intent mirror - independent of subscription state.
+    els.sNotifyLateOut.checked = !!state.settings.notifyEnabled;
+    els.sNotifyLateOut.disabled = !supported || !loggedIn;
+
+    if (!supported || !loggedIn) {
+      els.sPushEnabled.checked = false;
+      els.sPushEnabled.disabled = true;
+      els.pushRow.classList.add("is-disabled");
+      els.pushHint.textContent = !supported
+        ? "อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)"
+        : "ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
       return;
     }
-    navigator.serviceWorker.ready.then(function (reg) {
-      return reg.pushManager.getSubscription();
-    }).then(function (sub) {
-      if (sub) {
-        updatePushToggleAvailability(true);
-        return;
+
+    els.sPushEnabled.disabled = false;
+    els.pushRow.classList.remove("is-disabled");
+
+    ensurePushSubscription().then(function (subscribed) {
+      els.sPushEnabled.checked = subscribed;
+      var perm = notificationPermission();
+      if (state.settings.notifyEnabled && !subscribed) {
+        els.pushHint.textContent = perm === "denied"
+          ? "⚠️ แจ้งเตือนเวลาเลิกงานเปิดอยู่ แต่อุปกรณ์นี้บล็อกการแจ้งเตือน — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ แล้วกลับมาเปิดสวิตช์ Push ด้านบนอีกครั้ง"
+          : "⚠️ แจ้งเตือนเวลาเลิกงานเปิดอยู่ แต่อุปกรณ์นี้ยังไม่ได้รับ push — แตะสวิตช์ Push ด้านบนเพื่อเปิดรับบนอุปกรณ์นี้";
+      } else if (subscribed) {
+        els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+      } else if (perm === "denied") {
+        els.pushHint.textContent = "อุปกรณ์นี้บล็อกการแจ้งเตือนอยู่ — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน";
+      } else {
+        els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
       }
-      var canAutoResubscribe = currentUserId && state.settings.notifyEnabled &&
-        typeof Notification !== "undefined" && Notification.permission === "granted";
-      if (!canAutoResubscribe) {
-        updatePushToggleAvailability(false);
-        return;
-      }
-      subscribeToPush().then(function () {
-        updatePushToggleAvailability(true);
-      }).catch(function (err) {
-        console.error("ต่ออายุ Push subscription อัตโนมัติไม่สำเร็จ", err);
-        updatePushToggleAvailability(false);
+    });
+  }
+
+  // Called after the user explicitly turns the leave-work reminder ON. The
+  // intent itself is already saved by the caller; this only makes sure the
+  // current device can actually receive it, prompting for permission inside
+  // the user gesture when needed. It never rolls the intent back on failure -
+  // the setting stays on and simply gets delivered once the device is ready
+  // (e.g. after the user grants permission and reloads).
+  function ensureDeviceReadyForReminders() {
+    if (!pushSupported()) {
+      showToast("บันทึกการตั้งค่าแล้ว แต่อุปกรณ์นี้ไม่รองรับ push (iPhone ต้อง Add to Home Screen ก่อน)");
+      syncNotificationUI();
+      return;
+    }
+    var perm = notificationPermission();
+    if (perm === "granted") {
+      ensurePushSubscription().then(function (sub) {
+        showToast(sub ? "เปิดแจ้งเตือนเวลาเลิกงานแล้ว ✓" : "บันทึกแล้ว แต่ยังลงทะเบียน push บนอุปกรณ์นี้ไม่สำเร็จ");
+        syncNotificationUI();
       });
-    }).catch(function () {
-      updatePushToggleAvailability(false);
+      return;
+    }
+    if (perm === "denied") {
+      showToast("บันทึกแล้ว — แต่อุปกรณ์นี้บล็อกการแจ้งเตือน เปิดสิทธิ์ในตั้งค่าเบราว์เซอร์เพื่อรับบนเครื่องนี้");
+      syncNotificationUI();
+      return;
+    }
+    Notification.requestPermission().then(function (p) {
+      if (p === "granted") {
+        subscribeToPush()
+          .then(function () { showToast("เปิดแจ้งเตือนเวลาเลิกงานแล้ว ✓"); })
+          .catch(function (err) { console.error("สมัครรับ Push ไม่สำเร็จ", err); })
+          .finally(syncNotificationUI);
+      } else {
+        showToast("บันทึกแล้ว — แต่ยังไม่ได้อนุญาตแจ้งเตือน จะได้รับเมื่ออนุญาตสิทธิ์ในเบราว์เซอร์");
+        syncNotificationUI();
+      }
     });
   }
 
@@ -2718,63 +2765,61 @@
     });
   }
 
+  // This toggle governs only THIS device's push subscription (shared by both
+  // the leave-work reminder and the upcoming-event reminder). It does not
+  // touch the account-level notifyEnabled intent.
   els.sPushEnabled.addEventListener("change", function () {
-    console.log("[push debug] toggle change fired, checked =", els.sPushEnabled.checked);
     if (!els.sPushEnabled.checked) {
       unsubscribeFromPush().then(function () {
-        showToast("ปิดการแจ้งเตือนแบบ Push แล้ว");
+        showToast("ปิดการแจ้งเตือนแบบ Push บนอุปกรณ์นี้แล้ว");
       }).catch(function (err) {
         console.error("ยกเลิกการสมัครรับ Push ไม่สำเร็จ", err);
-      }).finally(refreshPushToggleState);
+      }).finally(syncNotificationUI);
       return;
     }
 
     if (!pushSupported()) {
-      console.log("[push debug] pushSupported() = false, aborting");
-      els.sPushEnabled.checked = false;
       showToast("อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)");
+      syncNotificationUI();
       return;
     }
     if (!currentUserId) {
-      console.log("[push debug] currentUserId is falsy, aborting");
-      els.sPushEnabled.checked = false;
       showToast("กรุณาเข้าสู่ระบบก่อนเปิดการแจ้งเตือนแบบ Push");
+      syncNotificationUI();
       return;
     }
 
-    console.log("[push debug] requesting Notification permission");
     Notification.requestPermission().then(function (permission) {
-      console.log("[push debug] Notification.requestPermission resolved:", permission);
       if (permission !== "granted") {
         showToast("การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน");
-        refreshPushToggleState();
+        syncNotificationUI();
         return;
       }
-      subscribeToPush().then(function () {
-        console.log("[push debug] subscribeToPush chain completed successfully");
-        showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓");
-        refreshPushToggleState();
-      }).catch(function (err) {
-        console.error("สมัครรับ Push ไม่สำเร็จ", err);
-        showToast("เปิดการแจ้งเตือนแบบ Push ไม่สำเร็จ");
-        refreshPushToggleState();
-      });
+      subscribeToPush()
+        .then(function () { showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓"); })
+        .catch(function (err) {
+          console.error("สมัครรับ Push ไม่สำเร็จ", err);
+          showToast("เปิดการแจ้งเตือนแบบ Push ไม่สำเร็จ");
+        })
+        .finally(syncNotificationUI);
     });
   });
 
-  // Piggybacks on the Push toggle above rather than requesting its own
-  // permission - the reminder is delivered server-side (see notifyEnabled's
-  // definition near the top of state.settings) and is meaningless without
-  // an active Push subscription, so refuse to turn on if Push isn't already
-  // enabled instead of prompting for anything here.
+  // The leave-work reminder toggle is pure account-level intent: flipping it
+  // saves immediately and unconditionally (that is what makes it persist
+  // across days and survive this device losing its subscription). Turning it
+  // on then makes a best-effort attempt to get this device ready to receive
+  // it; the setting is never rolled back if that attempt can't complete.
   els.sNotifyLateOut.addEventListener("change", function () {
-    if (els.sNotifyLateOut.checked && !els.sPushEnabled.checked) {
-      els.sNotifyLateOut.checked = false;
-      showToast("ต้องเปิดการแจ้งเตือนแบบ Push ด้านบนก่อน");
-      return;
-    }
-    state.settings.notifyEnabled = els.sNotifyLateOut.checked;
+    var wantOn = els.sNotifyLateOut.checked;
+    state.settings.notifyEnabled = wantOn;
     persistSettings();
+    if (wantOn) {
+      ensureDeviceReadyForReminders();
+    } else {
+      showToast("ปิดแจ้งเตือนเวลาเลิกงานแล้ว");
+      syncNotificationUI();
+    }
   });
 
   /* ============================================================
@@ -2789,5 +2834,5 @@
   loadSettingsToForm();
   renderSummary();
   checkUpcomingNoteNotifications();
-  refreshPushToggleState();
+  syncNotificationUI();
 })();

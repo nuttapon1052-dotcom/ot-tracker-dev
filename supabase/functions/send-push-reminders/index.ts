@@ -222,6 +222,7 @@ Deno.serve(async (req) => {
     });
 
     const staleSubIds: string[] = [];
+    let anySuccess = false;
     const results = await Promise.allSettled(
       (subs as PushSubscriptionRow[]).map((sub) =>
         webpush.sendNotification(
@@ -235,6 +236,7 @@ Deno.serve(async (req) => {
       const sub = (subs as PushSubscriptionRow[])[i];
       if (r.status === "fulfilled") {
         summary.sent++;
+        anySuccess = true;
         return;
       }
       const reason = r.reason as { statusCode?: number; message?: string };
@@ -253,12 +255,17 @@ Deno.serve(async (req) => {
       await supabaseAdmin.from("push_subscriptions").delete().in("id", staleSubIds);
     }
 
-    // บันทึกว่าเตือนวันนี้ (ตามเวลาท้องถิ่นของ user) ไปแล้ว ไม่ว่าการส่งแต่ละ
-    // อุปกรณ์จะสำเร็จครบทุกตัวหรือไม่ - กันไม่ให้ยิงซ้ำทุก 15 นาทีในวันเดียวกัน
-    await supabaseAdmin
-      .from("ot_settings")
-      .update({ last_reminder_sent_date: dateISO })
-      .eq("user_id", row.user_id);
+    // มาร์ค "เตือนวันนี้แล้ว" เฉพาะเมื่อส่งสำเร็จอย่างน้อย 1 เครื่องเท่านั้น
+    // ถ้าทุกเครื่องล้มเหลว (เช่น subscription เดียวที่มีหมดอายุไปแล้ว) อย่าเพิ่ง
+    // มาร์ค เพื่อให้ cron รอบถัดไปในช่วง window เดิมยังลองใหม่ได้ - เผื่ออุปกรณ์
+    // เพิ่ง self-heal สมัคร subscription ใหม่เข้ามา (ดู ensurePushSubscription
+    // ฝั่ง client) ก็จะยิงถึงในรอบถัดไปได้ ไม่ตกหล่นทั้งวัน
+    if (anySuccess) {
+      await supabaseAdmin
+        .from("ot_settings")
+        .update({ last_reminder_sent_date: dateISO })
+        .eq("user_id", row.user_id);
+    }
   }));
 
   return Response.json({ message: "ตรวจสอบและส่งแจ้งเตือนเสร็จสิ้น", ...summary });
