@@ -20,18 +20,18 @@ const REMINDER_AUTH_KEY = Deno.env.get("REMINDER_AUTH_KEY");
 // ค่าเริ่มต้น timezone เมื่อ user ยังไม่เคยตั้งไว้ใน ot_settings.timezone
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
-// ยอมให้ "เลยเวลาเลิกงาน" มาได้กี่นาทีแล้วยังนับว่าต้องเตือน - ตั้งไว้ 15 นาที
-// ให้เท่ากับความถี่ของ pg_cron (ทุก 15 นาที) ไม่ใช่ 5-10 นาที เพราะถ้า cron
-// รันทุก 15 นาทีแต่ window แคบกว่านั้น จะมีบางเวลาเลิกงานที่ตกหล่นไปเลย (เช่น
-// เลิกงาน 17:01 แต่ cron รอบถัดไปคือ 17:15 ห่างไป 14 นาที ถ้า window = 10
-// นาทีก็จะพลาดรอบนั้นไปเฉยๆ) ปรับได้ผ่าน secret REMINDER_WINDOW_MINUTES
-// แต่ควรตั้งให้ >= ความถี่ cron เสมอ
-const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 15;
+// ยอมให้ "เลยเวลาเป้าหมาย (เลิกงาน + delay)" มาได้กี่นาทีแล้วยังนับว่าต้องเตือน
+// pg_cron รันทุก 1 นาทีแล้ว (ดู migration 20260715000000_push_reminders_every_minute.sql)
+// จึงตั้ง window แคบไว้แค่ 2 นาที เพื่อให้เตือน "ตรงเวลาเป้าหมายเป๊ะ" สำหรับทุก
+// เวลาเลิกงาน (ไม่ใช่แค่เวลาที่ลงตัวกับ 15 นาที) เผื่อ 2 นาทีไว้กัน cron ยิงช้า
+// หรือตกหล่นไป 1 tick เท่านั้น ถ้า cron แข็งแรงจะยิงที่นาทีเป้าหมายพอดีเสมอ
+// ⚠️ window ต้อง >= ความถี่ cron (1 นาที) เสมอ ปรับได้ผ่าน secret REMINDER_WINDOW_MINUTES
+const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 2;
 
 // รอกี่นาทีหลัง "เวลาเลิกงาน/เวลาสิ้นสุด OT บังคับ" ถึงจะเตือน - ตั้งไว้ 15 นาที
 // ตามที่ผู้ใช้ต้องการ (เลิกงาน 20:00 -> เตือน 20:15) ไม่ใช่เตือนตอน 20:00 พอดี
-// จุดสำคัญ: ค่านี้ควรเป็นจำนวนเท่าของความถี่ cron (15 นาที) เพื่อให้เวลาเป้าหมาย
-// (end + delay) ตกลงบนจังหวะที่ cron รันพอดีเมื่อเวลาเลิกงานเป็นจำนวนเท่าของ 15
+// เมื่อ cron รันทุกนาที + window แคบ เวลาเป้าหมาย (end + delay) จะถูกยิงตรงนาที
+// นั้นเป๊ะไม่ว่าเวลาเลิกงานจะเป็นเลขอะไร (เช่น 20:07 -> เตือน 20:22 พอดี)
 // เตือนได้แค่วันละครั้งอยู่แล้วผ่าน last_reminder_sent_date ด้านล่าง
 const REMINDER_DELAY_MINUTES = Number(Deno.env.get("REMINDER_DELAY_MINUTES")) || 15;
 
@@ -296,7 +296,8 @@ Deno.serve(async (req) => {
   ป้องกันไม่ให้ใครก็ได้ที่ถือ anon key มายิงส่ง push แทน user อื่นได้ (ไม่ใช้
   Authorization header เพราะ Supabase gateway จะดักตรวจค่านั้นเองก่อนถึงโค้ดเรา)
 
-  ดูวิธีตั้งค่า pg_cron ให้เรียกฟังก์ชันนี้อัตโนมัติทุก 15 นาทีได้ที่
-  supabase/migrations/20260712000000_push_reminders.sql
+  ดูวิธีตั้งค่า pg_cron ให้เรียกฟังก์ชันนี้อัตโนมัติทุก 1 นาทีได้ที่
+  supabase/migrations/20260715000000_push_reminders_every_minute.sql
+  (ของเดิมรันทุก 15 นาที ดู 20260712000000_push_reminders.sql)
 
 */
