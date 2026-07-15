@@ -36,18 +36,23 @@
       defaultTimeOut: "",
       lockTimeIn: false,
       lockTimeOut: false,
-      // late clock-out reminder toggle (server-side Web Push). This is pure
-      // account-level user intent: it is changed ONLY when the user flips the
-      // sNotifyLateOut switch, and is NEVER cleared by device/subscription
-      // state (doing so was the bug that silently disabled reminders). The
-      // send-push-reminders Edge Function reads ot_settings.data.notifyEnabled
-      // directly and does all the "reminder N min after the effective end
-      // time, no time_out yet" scheduling/delivery via pg_cron (see
-      // supabase/functions/send-push-reminders and
-      // supabase/migrations/20260712000000_push_reminders.sql). Delivery to a
-      // given device still needs that device to hold a push subscription,
-      // which the app self-heals on load (see ensurePushSubscription).
-      notifyEnabled: false
+      // when on, the locked clock-out time is also filled on Sat/Sun instead
+      // of being left blank (see applyWeekendTimeDefault). Only meaningful
+      // while lockTimeOut is on.
+      lockTimeOutWeekend: false,
+      // "จดบันทึก OT" reminder toggle (server-side Web Push). Pure account-level
+      // user intent: changed ONLY when the user flips the sNotifyLateOut switch,
+      // and NEVER cleared by device/subscription state (doing so was the bug
+      // that silently disabled reminders). The send-push-reminders Edge Function
+      // reads ot_settings.data.notifyEnabled + notifyTime directly and fires a
+      // single push at exactly notifyTime each day (if today has no clock-out
+      // yet) via pg_cron - no more "N minutes after the schedule end" math (see
+      // supabase/functions/send-push-reminders). Delivery to a given device
+      // still needs that device to hold a push subscription, which the app
+      // self-heals on load (see ensurePushSubscription).
+      notifyEnabled: false,
+      // exact wall-clock time (HH:MM, user's local tz) the reminder above fires
+      notifyTime: "17:15"
     },
     entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
     workNotes: [] // { id, title, description, startDate, endDate, reminderEnabled, reminderDate, reminderTime, reminderSent }
@@ -580,12 +585,16 @@
     sDefaultTimeOut: $("s-defaulttimeout"),
     sLockTimeIn: $("s-locktimein"),
     sLockTimeOut: $("s-locktimeout"),
+    sLockTimeOutWeekend: $("s-locktimeoutweekend"),
     lockTimeInRow: $("lockTimeInRow"),
     lockTimeOutRow: $("lockTimeOutRow"),
+    lockTimeOutWeekendRow: $("lockTimeOutWeekendRow"),
     sPushEnabled: $("s-pushenabled"),
     pushRow: $("pushRow"),
     pushHint: $("pushHint"),
     sNotifyLateOut: $("s-notifylateout"),
+    sNotifyTime: $("s-notifytime"),
+    notifyTimeRow: $("notifyTimeRow"),
     currencyTrigger: $("currencyTrigger"),
     currencyTriggerFlag: $("currencyTriggerFlag"),
     currencyTriggerLabel: $("currencyTriggerLabel"),
@@ -875,17 +884,17 @@
     return (s.lockTimeOut && s.defaultTimeOut) ? s.defaultTimeOut : "";
   }
 
-  // Weekend clock-out is never predictable, so it's always left blank there
-  // regardless of the lock - but only touches the field when it still looks
-  // like an untouched default (blank, or the locked weekday value) so it
-  // never clobbers something the user typed.
+  // By default weekend clock-out is left blank (it's rarely predictable), but
+  // if the user turned on lockTimeOutWeekend the locked value is filled on
+  // Sat/Sun too. Only touches the field when it still looks like an untouched
+  // default (blank, or the locked value) so it never clobbers user input.
   function applyWeekendTimeDefault() {
-    var weekend = isWeekendDate(els.fDate.value);
-    var weekdayDefault = lockedTimeOutWeekday();
-    if (weekend && els.fTimeOut.value === weekdayDefault) {
+    var lockedOut = lockedTimeOutWeekday();
+    var blankWeekend = isWeekendDate(els.fDate.value) && !state.settings.lockTimeOutWeekend;
+    if (blankWeekend && els.fTimeOut.value === lockedOut) {
       els.fTimeOut.value = "";
-    } else if (!weekend && els.fTimeOut.value === "") {
-      els.fTimeOut.value = weekdayDefault;
+    } else if (!blankWeekend && els.fTimeOut.value === "") {
+      els.fTimeOut.value = lockedOut;
     }
   }
 
@@ -1981,6 +1990,7 @@
     els.sDefaultTimeOut.value = s.defaultTimeOut || "";
     els.sLockTimeIn.checked = !!s.lockTimeIn;
     els.sLockTimeOut.checked = !!s.lockTimeOut;
+    els.sLockTimeOutWeekend.checked = !!s.lockTimeOutWeekend;
     updateLockToggleAvailability();
     updateCurrencyTrigger();
     els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
@@ -1995,6 +2005,8 @@
     els.sLunchEnd.value = s.lunchEnd;
     els.sNormalEnd.value = s.normalEnd;
     els.sNotifyLateOut.checked = !!s.notifyEnabled;
+    els.sNotifyTime.value = s.notifyTime || "";
+    updateNotifyTimeVisible();
     els.sHasMandatoryOt.checked = !!s.hasMandatoryOt;
     els.sMandatoryOtEnd.value = s.mandatoryOtEnd;
     els.sHasEveningBreak.checked = !!s.hasEveningBreak;
@@ -2082,6 +2094,10 @@
     els.sLockTimeOut.disabled = !hasOut;
     els.lockTimeInRow.classList.toggle("is-disabled", !hasIn);
     els.lockTimeOutRow.classList.toggle("is-disabled", !hasOut);
+    // the weekend sub-toggle only makes sense once clock-out is actually locked
+    var canWeekend = hasOut && state.settings.lockTimeOut;
+    els.sLockTimeOutWeekend.disabled = !canWeekend;
+    els.lockTimeOutWeekendRow.classList.toggle("is-disabled", !canWeekend);
   }
 
   els.sDefaultTimeIn.addEventListener("input", function () {
@@ -2111,6 +2127,12 @@
 
   els.sLockTimeOut.addEventListener("change", function () {
     state.settings.lockTimeOut = els.sLockTimeOut.checked;
+    updateLockToggleAvailability();
+    persistSettings();
+  });
+
+  els.sLockTimeOutWeekend.addEventListener("change", function () {
+    state.settings.lockTimeOutWeekend = els.sLockTimeOutWeekend.checked;
     persistSettings();
   });
 
@@ -2758,8 +2780,8 @@
       var perm = notificationPermission();
       if (state.settings.notifyEnabled && !subscribed) {
         els.pushHint.textContent = perm === "denied"
-          ? "⚠️ แจ้งเตือนเวลาเลิกงานเปิดอยู่ แต่อุปกรณ์นี้บล็อกการแจ้งเตือน — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ แล้วกลับมาเปิดสวิตช์ Push ด้านบนอีกครั้ง"
-          : "⚠️ แจ้งเตือนเวลาเลิกงานเปิดอยู่ แต่อุปกรณ์นี้ยังไม่ได้รับ push — แตะสวิตช์ Push ด้านบนเพื่อเปิดรับบนอุปกรณ์นี้";
+          ? "⚠️ แจ้งเตือนจดบันทึก OT เปิดอยู่ แต่อุปกรณ์นี้บล็อกการแจ้งเตือน — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ แล้วกลับมาเปิดสวิตช์ Push ด้านบนอีกครั้ง"
+          : "⚠️ แจ้งเตือนจดบันทึก OT เปิดอยู่ แต่อุปกรณ์นี้ยังไม่ได้รับ push — แตะสวิตช์ Push ด้านบนเพื่อเปิดรับบนอุปกรณ์นี้";
       } else if (subscribed) {
         els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
       } else if (perm === "denied") {
@@ -2785,7 +2807,7 @@
     var perm = notificationPermission();
     if (perm === "granted") {
       ensurePushSubscription().then(function (sub) {
-        showToast(sub ? "เปิดแจ้งเตือนเวลาเลิกงานแล้ว ✓" : "บันทึกแล้ว แต่ยังลงทะเบียน push บนอุปกรณ์นี้ไม่สำเร็จ");
+        showToast(sub ? "เปิดแจ้งเตือนจดบันทึก OT แล้ว ✓" : "บันทึกแล้ว แต่ยังลงทะเบียน push บนอุปกรณ์นี้ไม่สำเร็จ");
         syncNotificationUI();
       });
       return;
@@ -2798,7 +2820,7 @@
     Notification.requestPermission().then(function (p) {
       if (p === "granted") {
         subscribeToPush()
-          .then(function () { showToast("เปิดแจ้งเตือนเวลาเลิกงานแล้ว ✓"); })
+          .then(function () { showToast("เปิดแจ้งเตือนจดบันทึก OT แล้ว ✓"); })
           .catch(function (err) { console.error("สมัครรับ Push ไม่สำเร็จ", err); })
           .finally(syncNotificationUI);
       } else {
@@ -2908,13 +2930,25 @@
   els.sNotifyLateOut.addEventListener("change", function () {
     var wantOn = els.sNotifyLateOut.checked;
     state.settings.notifyEnabled = wantOn;
+    updateNotifyTimeVisible();
     persistSettings();
     if (wantOn) {
       ensureDeviceReadyForReminders();
     } else {
-      showToast("ปิดแจ้งเตือนเวลาเลิกงานแล้ว");
+      showToast("ปิดแจ้งเตือนจดบันทึก OT แล้ว");
       syncNotificationUI();
     }
+  });
+
+  // The reminder time only matters while the reminder is on, so hide the row
+  // when it's off to keep the settings card uncluttered.
+  function updateNotifyTimeVisible() {
+    els.notifyTimeRow.classList.toggle("hidden", !state.settings.notifyEnabled);
+  }
+
+  els.sNotifyTime.addEventListener("input", function () {
+    state.settings.notifyTime = els.sNotifyTime.value || "";
+    persistSettings();
   });
 
   /* ============================================================

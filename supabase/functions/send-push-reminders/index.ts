@@ -20,20 +20,13 @@ const REMINDER_AUTH_KEY = Deno.env.get("REMINDER_AUTH_KEY");
 // ค่าเริ่มต้น timezone เมื่อ user ยังไม่เคยตั้งไว้ใน ot_settings.timezone
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
-// ยอมให้ "เลยเวลาเป้าหมาย (เลิกงาน + delay)" มาได้กี่นาทีแล้วยังนับว่าต้องเตือน
-// pg_cron รันทุก 1 นาทีแล้ว (ดู migration 20260715000000_push_reminders_every_minute.sql)
-// จึงตั้ง window แคบไว้แค่ 2 นาที เพื่อให้เตือน "ตรงเวลาเป้าหมายเป๊ะ" สำหรับทุก
-// เวลาเลิกงาน (ไม่ใช่แค่เวลาที่ลงตัวกับ 15 นาที) เผื่อ 2 นาทีไว้กัน cron ยิงช้า
-// หรือตกหล่นไป 1 tick เท่านั้น ถ้า cron แข็งแรงจะยิงที่นาทีเป้าหมายพอดีเสมอ
+// ยอมให้ "เลยเวลาเป้าหมาย (notifyTime ที่ผู้ใช้ตั้งเอง)" มาได้กี่นาทีแล้วยังนับ
+// ว่าต้องเตือน pg_cron รันทุก 1 นาที (ดู migration 20260715000000) เป้าหมายคือยิง
+// ตรงนาที notifyTime พอดี แต่เผื่อ window ไว้กว้างพอควรกัน cron ยิงช้า/ตกหล่นหลาย
+// tick แล้วไม่หลุดทั้งวัน (กันซ้ำด้วย last_reminder_sent_date อยู่แล้ว) - ตั้ง
+// default 120 นาที เพื่อทนต่อ cron สะดุด แต่ยังไม่เตือนดึกเกินจริง
 // ⚠️ window ต้อง >= ความถี่ cron (1 นาที) เสมอ ปรับได้ผ่าน secret REMINDER_WINDOW_MINUTES
-const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 2;
-
-// รอกี่นาทีหลัง "เวลาเลิกงาน/เวลาสิ้นสุด OT บังคับ" ถึงจะเตือน - ตั้งไว้ 15 นาที
-// ตามที่ผู้ใช้ต้องการ (เลิกงาน 20:00 -> เตือน 20:15) ไม่ใช่เตือนตอน 20:00 พอดี
-// เมื่อ cron รันทุกนาที + window แคบ เวลาเป้าหมาย (end + delay) จะถูกยิงตรงนาที
-// นั้นเป๊ะไม่ว่าเวลาเลิกงานจะเป็นเลขอะไร (เช่น 20:07 -> เตือน 20:22 พอดี)
-// เตือนได้แค่วันละครั้งอยู่แล้วผ่าน last_reminder_sent_date ด้านล่าง
-const REMINDER_DELAY_MINUTES = Number(Deno.env.get("REMINDER_DELAY_MINUTES")) || 15;
+const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 120;
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
@@ -47,9 +40,8 @@ interface OtSettingsRow {
   user_id: string;
   data: {
     notifyEnabled?: boolean;
-    normalEnd?: string;
-    hasMandatoryOt?: boolean;
-    mandatoryOtEnd?: string;
+    // เวลาที่ผู้ใช้ตั้งเองว่าจะให้เตือนกี่โมง (HH:MM ตาม timezone ของ user)
+    notifyTime?: string;
   } | null;
   timezone: string | null;
   last_reminder_sent_date: string | null;
@@ -153,23 +145,13 @@ Deno.serve(async (req) => {
   await Promise.allSettled(rows.map(async (row) => {
     summary.checked++;
 
-    const normalEnd = row.data?.normalEnd;
-    if (!normalEnd) return; // ยังไม่ได้ตั้งเวลาเลิกงานปกติ
+    // เวลาที่ผู้ใช้ตั้งเองว่าจะให้เตือนกี่โมง - เป็นตัวเดียวที่ใช้กำหนดเวลาเตือน
+    // แล้ว (ไม่เกี่ยวกับตารางคำนวณ OT / OT บังคับ / +15 นาที อีกต่อไป)
+    const notifyTime = row.data?.notifyTime;
+    if (!notifyTime) return; // ยังไม่ได้ตั้งเวลาแจ้งเตือน
 
-    // ถ้าเปิด "บังคับ OT" ไว้ เวลาที่ควรเตือนคือเวลาสิ้นสุด OT บังคับ
-    // (mandatoryOtEnd) ไม่ใช่เวลาเลิกงานปกติ - ต้องคำนวณให้ตรงกับที่ client
-    // ใช้ใน effectiveSchedule() (js/app.js) ไม่งั้นคนที่ติ๊กบังคับ OT จะไม่มี
-    // ทางได้รับแจ้งเตือนเลย เพราะ window 15 นาทีปิดไปตั้งแต่เวลาเลิกงานปกติแล้ว
-    const effectiveEnd = row.data?.hasMandatoryOt && row.data?.mandatoryOtEnd
-      ? row.data.mandatoryOtEnd
-      : normalEnd;
-
-    const endMinutes = parseTimeToMinutes(effectiveEnd);
-    if (endMinutes === null) return;
-
-    // เตือน "หลังเลิกงาน REMINDER_DELAY_MINUTES นาที" ไม่ใช่ตอนเลิกงานพอดี
-    // เลื่อนเป้าหมายไปข้างหน้าตาม delay แล้ว mod 1440 กันข้ามเที่ยงคืน
-    const targetMinutes = (endMinutes + REMINDER_DELAY_MINUTES) % 1440;
+    const targetMinutes = parseTimeToMinutes(notifyTime);
+    if (targetMinutes === null) return;
 
     const timeZone = row.timezone || DEFAULT_TIMEZONE;
     let dateISO: string;
@@ -180,7 +162,7 @@ Deno.serve(async (req) => {
       ({ dateISO, minutesOfDay } = getZonedDateAndMinutes(now, DEFAULT_TIMEZONE));
     }
 
-    // ยังไม่ถึงเวลาเตือน (เลิกงาน + delay) หรือเลยมาเกิน window ที่ยอมรับแล้ว
+    // ยังไม่ถึงเวลาเตือน (notifyTime) หรือเลยมาเกิน window ที่ยอมรับแล้ว
     const elapsed = minutesSince(targetMinutes, minutesOfDay);
     if (elapsed > REMINDER_WINDOW_MINUTES) return;
 
@@ -229,7 +211,7 @@ Deno.serve(async (req) => {
 
     const payload = JSON.stringify({
       title: "OT Fast",
-      body: "⏰ ถึงเวลาเลิกงานแล้ว อย่าลืมบันทึกเวลาทำงานวันนี้",
+      body: "⏰ อย่าลืมจดบันทึก OT ของวันนี้",
     });
 
     const staleSubIds: string[] = [];

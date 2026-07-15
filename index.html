@@ -489,7 +489,18 @@
               <span class="switch__track"><span class="switch__thumb"></span></span>
             </span>
           </label>
-          <p class="hint">กรอกเวลาเลิกงานปกติด้านบนก่อน จึงจะเปิดใช้ได้ · วันเสาร์-อาทิตย์จะเว้นว่างเสมอไม่ว่าจะล็อคไว้หรือไม่</p>
+          <p class="hint">กรอกเวลาเลิกงานปกติด้านบนก่อน จึงจะเปิดใช้ได้ — เมื่อเปิด เวลาเลิกงานจะเติมให้อัตโนมัติทุกครั้งที่เปิดฟอร์มบันทึกใหม่</p>
+        </div>
+
+        <div class="field">
+          <label class="switch-row" id="lockTimeOutWeekendRow" for="s-locktimeoutweekend">
+            <span>รวมวันเสาร์-อาทิตย์ด้วย</span>
+            <span class="switch">
+              <input type="checkbox" id="s-locktimeoutweekend" disabled />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint">ต้องเปิด "ล็อคเวลาเลิกงาน" ก่อน — เมื่อเปิด เวลาเลิกงานจะเติมให้ทุกวันรวมเสาร์-อาทิตย์ (ถ้าปิด เสาร์-อาทิตย์จะเว้นว่างไว้)</p>
         </div>
       </div>
 
@@ -600,13 +611,19 @@
 
         <div class="field">
           <label class="switch-row" for="s-notifylateout">
-            <span>แจ้งเตือนถ้ายังไม่บันทึกเวลาออกงาน (15 นาทีหลังเวลาเลิกงาน)</span>
+            <span>แจ้งเตือนให้จดบันทึก OT</span>
             <span class="switch">
               <input type="checkbox" id="s-notifylateout" />
               <span class="switch__track"><span class="switch__thumb"></span></span>
             </span>
           </label>
-          <p class="hint">ต้องเปิด Push notification ด้านบนก่อน ถึงจะได้รับการแจ้งเตือนนี้</p>
+          <p class="hint">ต้องเปิด Push notification ด้านบนก่อน — จะเตือนทุกวันตามเวลาที่ตั้งไว้ ถ้ายังไม่ได้บันทึกเวลาออกงานของวันนั้น</p>
+        </div>
+
+        <div class="field hidden" id="notifyTimeRow">
+          <label for="s-notifytime">เวลาที่ให้แจ้งเตือน</label>
+          <input type="time" id="s-notifytime" value="17:15" />
+          <p class="hint">ระบุเวลาที่อยากให้เตือนตรงๆ ได้เลย (เช่น 17:15) จะเตือนเวลานี้ทุกวัน</p>
         </div>
 
         <div class="save-indicator" id="saveIndicator">บันทึกอัตโนมัติแล้ว ✓</div>
