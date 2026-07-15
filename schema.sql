@@ -31,6 +31,13 @@ create table work_notes (
   description text,
   start_date date not null,
   end_date date not null,
+  -- reminder_sent เพิ่มโดย migration 20260713000000_event_reminders.sql
+  reminder_sent boolean not null default false,
+  -- แจ้งเตือนตามวัน/เวลาที่ผู้ใช้เลือกเอง เพิ่มโดย migration
+  -- 20260715010000_note_custom_reminder.sql (reminder_time = "HH:MM" ตาม tz ผู้ใช้)
+  reminder_enabled boolean not null default false,
+  reminder_date date,
+  reminder_time text,
   created_at timestamptz default now()
 );
 

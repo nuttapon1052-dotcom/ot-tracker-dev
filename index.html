@@ -191,7 +191,7 @@
     <div id="entrySubviewNotes" class="hidden">
       <form id="noteForm" class="card form-card">
         <h2 class="card__title" id="noteFormTitle">บันทึกเหตุการณ์ล่วงหน้า</h2>
-        <p class="hint form-intro">จดบันทึกนัดหมายหรืองานที่ต้องทำล่วงหน้า เช่น ทำงานนอกสถานที่ ประชุม หรือวันลา ระบบจะแจ้งเตือนอัตโนมัติก่อนถึงวันที่ 1 วัน (ต้องเปิดการแจ้งเตือนในหน้าตั้งค่าก่อน)</p>
+        <p class="hint form-intro">จดบันทึกนัดหมายหรืองานที่ต้องทำล่วงหน้า เช่น ทำงานนอกสถานที่ ประชุม หรือวันลา แล้วเลือกเองว่าจะให้ระบบแจ้งเตือนวันไหน เวลาไหน (ต้องเปิดการแจ้งเตือนในหน้าตั้งค่าก่อน)</p>
 
         <div class="field">
           <label for="n-title">หัวข้อ</label>
@@ -219,6 +219,32 @@
               <span class="date-trigger__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ปฏิทิน"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
             </button>
             <input type="hidden" id="n-enddate" />
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="switch-row" for="n-remind-enabled">
+            <span>ตั้งการแจ้งเตือนสำหรับเหตุการณ์นี้</span>
+            <span class="switch">
+              <input type="checkbox" id="n-remind-enabled" />
+              <span class="switch__track"><span class="switch__thumb"></span></span>
+            </span>
+          </label>
+          <p class="hint">เลือกวันและเวลาที่อยากให้เตือน จะส่งการแจ้งเตือนแม้ปิดแอป (ต้องเปิด Push ในหน้าตั้งค่า)</p>
+        </div>
+
+        <div class="field-row hidden" id="noteRemindFields">
+          <div class="field">
+            <label for="noteRemindTrigger">วันที่แจ้งเตือน</label>
+            <button type="button" id="noteRemindTrigger" class="date-trigger" aria-haspopup="dialog">
+              <span id="noteRemindTriggerText">เลือกวันที่</span>
+              <span class="date-trigger__icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ปฏิทิน"><rect x="3" y="4" width="18" height="17" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="16" y1="2" x2="16" y2="6"/></svg></span>
+            </button>
+            <input type="hidden" id="n-reminddate" />
+          </div>
+          <div class="field">
+            <label for="n-remindtime">เวลา</label>
+            <input type="time" id="n-remindtime" />
           </div>
         </div>
 

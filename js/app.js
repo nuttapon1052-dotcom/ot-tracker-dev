@@ -50,7 +50,7 @@
       notifyEnabled: false
     },
     entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
-    workNotes: [] // { id, title, description, startDate, endDate }
+    workNotes: [] // { id, title, description, startDate, endDate, reminderEnabled, reminderDate, reminderTime, reminderSent }
   };
 
   var CURRENCIES = {
@@ -523,6 +523,12 @@
     noteEndTrigger: $("noteEndTrigger"),
     noteEndTriggerText: $("noteEndTriggerText"),
     nEndDate: $("n-enddate"),
+    nRemindEnabled: $("n-remind-enabled"),
+    noteRemindFields: $("noteRemindFields"),
+    noteRemindTrigger: $("noteRemindTrigger"),
+    noteRemindTriggerText: $("noteRemindTriggerText"),
+    nRemindDate: $("n-reminddate"),
+    nRemindTime: $("n-remindtime"),
     cancelEditNoteBtn: $("cancelEditNoteBtn"),
     saveNoteBtn: $("saveNoteBtn"),
     noteList: $("noteList"),
@@ -686,6 +692,7 @@
   var ICON_WARNING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="คำเตือน"><path d="m12 2 10 18H2L12 2Z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none"/></svg>';
   var ICON_CLOUD_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ซิงก์แล้ว"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A4 4 0 0 0 6 19h11.5Z"/><path d="m9 15 2 2 4-4"/></svg>';
   var ICON_NOTE = '<svg class="note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="โน้ต"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  var ICON_BELL = '<svg class="note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แจ้งเตือน"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 
   function updateThemeToggleIcon(theme) {
     els.themeToggleBtn.innerHTML = theme === "dark" ? ICON_SUN : ICON_MOON;
@@ -1074,7 +1081,12 @@
   function calendarTargetFieldValue() {
     if (calendarTarget === "note-start") return els.nStartDate.value;
     if (calendarTarget === "note-end") return els.nEndDate.value;
+    if (calendarTarget === "note-remind") return els.nRemindDate.value;
     return els.fDate.value;
+  }
+
+  function isNoteCalendarTarget() {
+    return calendarTarget === "note-start" || calendarTarget === "note-end" || calendarTarget === "note-remind";
   }
 
   function renderCalendar() {
@@ -1144,6 +1156,9 @@
         els.nEndDate.value = iso;
         updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
       }
+    } else if (target === "note-remind") {
+      els.nRemindDate.value = iso;
+      updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     } else {
       els.nEndDate.value = iso;
       updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
@@ -1164,7 +1179,7 @@
   }
 
   function selectCalendarDate(iso) {
-    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+    if (isNoteCalendarTarget()) {
       setNoteDateValue(calendarTarget, iso);
     } else {
       setFDateValue(iso);
@@ -1175,6 +1190,7 @@
   els.dateTrigger.addEventListener("click", function () { openCalendar("entry"); });
   els.noteStartTrigger.addEventListener("click", function () { openCalendar("note-start"); });
   els.noteEndTrigger.addEventListener("click", function () { openCalendar("note-end"); });
+  els.noteRemindTrigger.addEventListener("click", function () { openCalendar("note-remind"); });
   els.calClose.addEventListener("click", closeCalendar);
 
   els.calPrev.addEventListener("click", function () {
@@ -1191,7 +1207,7 @@
     selectCalendarDate(toISODate(t));
   });
   els.calClear.addEventListener("click", function () {
-    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+    if (isNoteCalendarTarget()) {
       setNoteDateValue(calendarTarget, "");
     } else {
       setFDateValue("");
@@ -1294,13 +1310,25 @@
    * ========================================================== */
   var editingNoteId = null;
 
+  // Shows/hides the reminder date+time row to match the toggle. Uses the
+  // .hidden class (display:none !important) rather than the hidden attribute,
+  // which .field-row's display:grid would otherwise override.
+  function setNoteReminderVisible(show) {
+    els.noteRemindFields.classList.toggle("hidden", !show);
+  }
+
   function resetNoteForm() {
     editingNoteId = null;
     els.noteForm.reset();
     els.nStartDate.value = "";
     els.nEndDate.value = "";
+    els.nRemindDate.value = "";
+    els.nRemindTime.value = "";
+    els.nRemindEnabled.checked = false;
+    setNoteReminderVisible(false);
     updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
     updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     els.noteFormTitle.textContent = "บันทึกเหตุการณ์ล่วงหน้า";
     els.saveNoteBtn.textContent = "บันทึก";
     els.cancelEditNoteBtn.classList.add("hidden");
@@ -1312,13 +1340,33 @@
     els.nDescription.value = note.description || "";
     els.nStartDate.value = note.startDate;
     els.nEndDate.value = note.endDate;
+    els.nRemindEnabled.checked = !!note.reminderEnabled;
+    els.nRemindDate.value = note.reminderDate || "";
+    els.nRemindTime.value = note.reminderTime || "";
+    setNoteReminderVisible(!!note.reminderEnabled);
     updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
     updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     els.noteFormTitle.textContent = "แก้ไขบันทึกเหตุการณ์";
     els.saveNoteBtn.textContent = "บันทึกการแก้ไข";
     els.cancelEditNoteBtn.classList.remove("hidden");
     els.noteForm.scrollIntoView({ behavior: "smooth", block: "start" });
   }
+
+  // Turning the reminder on pre-fills sensible defaults (the event's start
+  // date, or today, at 08:00) so the user usually only has to tweak, not
+  // enter from scratch.
+  els.nRemindEnabled.addEventListener("change", function () {
+    var show = els.nRemindEnabled.checked;
+    setNoteReminderVisible(show);
+    if (show) {
+      if (!els.nRemindDate.value) {
+        els.nRemindDate.value = els.nStartDate.value || toISODate(new Date());
+        updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
+      }
+      if (!els.nRemindTime.value) els.nRemindTime.value = "08:00";
+    }
+  });
 
   els.noteForm.addEventListener("submit", function (e) {
     e.preventDefault();
@@ -1334,18 +1382,40 @@
       showToast("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม");
       return;
     }
+
+    var remindEnabled = els.nRemindEnabled.checked;
+    var remindDate = remindEnabled ? els.nRemindDate.value : "";
+    var remindTime = remindEnabled ? els.nRemindTime.value : "";
+    if (remindEnabled && (!remindDate || !remindTime)) {
+      showToast("กรุณาเลือกวันและเวลาแจ้งเตือน");
+      return;
+    }
+
     var draft = {
       title: title,
       description: els.nDescription.value.trim(),
       startDate: startDate,
-      endDate: endDate
+      endDate: endDate,
+      reminderEnabled: remindEnabled,
+      reminderDate: remindDate,
+      reminderTime: remindTime
     };
     if (editingNoteId) {
       var idx = state.workNotes.findIndex(function (x) { return x.id === editingNoteId; });
-      if (idx !== -1) state.workNotes[idx] = Object.assign({ id: editingNoteId }, draft);
+      if (idx !== -1) {
+        var prev = state.workNotes[idx];
+        // Only re-arm the (server-side) "sent" flag when the schedule actually
+        // changed - editing just the title shouldn't make a past reminder fire
+        // again, but rescheduling to a new day/time should.
+        var rescheduled = !prev.reminderEnabled !== !remindEnabled ||
+          prev.reminderDate !== remindDate || prev.reminderTime !== remindTime;
+        draft.reminderSent = rescheduled ? false : !!prev.reminderSent;
+        state.workNotes[idx] = Object.assign({ id: editingNoteId }, draft);
+      }
       showToast("แก้ไขบันทึกแล้ว ✓");
     } else {
       draft.id = uid();
+      draft.reminderSent = false;
       state.workNotes.push(draft);
       showToast("บันทึกแล้ว ✓");
     }
@@ -1376,12 +1446,17 @@
 
     els.noteList.innerHTML = sorted.map(function (note) {
       var descHtml = note.description ? '<div class="entry-item__note">' + ICON_NOTE + escapeHtml(note.description) + "</div>" : "";
+      var remindHtml = (note.reminderEnabled && note.reminderDate && note.reminderTime)
+        ? '<div class="entry-item__note">' + ICON_BELL + "แจ้งเตือน " +
+            dfShort.format(fromISODate(note.reminderDate)) + " " + escapeHtml(note.reminderTime) + " น." + "</div>"
+        : "";
       return (
         '<div class="entry-item" data-id="' + note.id + '">' +
           '<div class="entry-item__main">' +
             '<div class="entry-item__date">' + escapeHtml(note.title) + "</div>" +
             '<div class="entry-item__time">' + noteDateRangeLabel(note) + "</div>" +
             descHtml +
+            remindHtml +
           "</div>" +
           '<div class="entry-item__actions">' +
             '<button class="icon-btn icon-btn--tonal" data-action="edit" aria-label="แก้ไข"><span class="icon-tonal icon-tonal--sm icon-tonal--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แก้ไข"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/><line x1="13.5" y1="6.5" x2="17.5" y2="10.5"/></svg></span></button>' +
@@ -2071,19 +2146,27 @@
     try { localStorage.setItem(NOTE_NOTIFY_KEY, JSON.stringify(s)); } catch (e) {}
   }
 
+  // Foreground safety-net for event reminders: when the tab happens to be
+  // open at/after a note's chosen reminder time (today), show a local
+  // notification, once per note per day. The reliable delivery path is the
+  // server-side push (send-event-reminders); this just covers the case where
+  // push isn't set up on this device but the app is open.
   function checkUpcomingNoteNotifications() {
     if (notificationSupport() !== "granted") return;
 
-    var todayISO = toISODate(new Date());
-    var tomorrowISO = toISODate(addDays(new Date(), 1));
+    var now = new Date();
+    var todayISO = toISODate(now);
+    var nowMinutes = now.getHours() * 60 + now.getMinutes();
     var notified = getNotifiedNoteState();
     if (notified.date !== todayISO) notified = { date: todayISO, ids: [] };
 
     state.workNotes.forEach(function (note) {
-      if (note.startDate !== tomorrowISO) return;
+      if (!note.reminderEnabled || !note.reminderDate || !note.reminderTime) return;
+      if (note.reminderDate !== todayISO) return;
+      if (nowMinutes < timeToMinutes(note.reminderTime)) return; // ยังไม่ถึงเวลา
       if (notified.ids.indexOf(note.id) !== -1) return;
       try {
-        new Notification("OT Fast", { body: "🔔 พรุ่งนี้: " + note.title });
+        new Notification("OT Fast", { body: "🔔 " + note.title });
       } catch (e) {
         console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
       }
@@ -2376,7 +2459,15 @@
       title: note.title,
       description: note.description || "",
       start_date: note.startDate,
-      end_date: note.endDate
+      end_date: note.endDate,
+      reminder_enabled: !!note.reminderEnabled,
+      reminder_date: (note.reminderEnabled && note.reminderDate) ? note.reminderDate : null,
+      reminder_time: (note.reminderEnabled && note.reminderTime) ? note.reminderTime : null,
+      // Round-trip the server-written "sent" flag: work_notes rows are wiped
+      // and reinserted wholesale on every sync (see pushStateToCloud), so if
+      // we didn't carry this value back it would reset to false every sync and
+      // re-fire past reminders.
+      reminder_sent: !!note.reminderSent
     };
   }
 
@@ -2386,7 +2477,11 @@
       title: row.title,
       description: row.description || "",
       startDate: row.start_date,
-      endDate: row.end_date
+      endDate: row.end_date,
+      reminderEnabled: !!row.reminder_enabled,
+      reminderDate: row.reminder_date || "",
+      reminderTime: row.reminder_time || "",
+      reminderSent: !!row.reminder_sent
     };
   }
 
