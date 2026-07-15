@@ -74,7 +74,9 @@
     color-mix(in srgb, var(--series-normal) 5%, var(--surface-1)) 100%);
   --page-bg-image:
     radial-gradient(circle at 15% 0%, color-mix(in srgb, var(--series-normal) 10%, transparent) 0%, transparent 45%),
-    radial-gradient(circle at 85% 100%, color-mix(in srgb, var(--series-ot) 10%, transparent) 0%, transparent 45%);
+    radial-gradient(circle at 90% 55%, color-mix(in srgb, var(--series-ot) 8%, transparent) 0%, transparent 45%),
+    radial-gradient(circle at 20% 100%, color-mix(in srgb, var(--series-ot) 10%, transparent) 0%, transparent 45%),
+    radial-gradient(circle at 85% 100%, color-mix(in srgb, var(--series-normal) 8%, transparent) 0%, transparent 40%);
 }
 :root[data-bg-style="gradient"] body{
   background-image: var(--page-bg-image);
@@ -88,9 +90,10 @@
    saturating blur so accent colors bleed through richly. */
 :root[data-bg-style="glass"] body{
   background-image:
-    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--series-normal) 22%, transparent) 0%, transparent 55%),
-    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--series-ot) 16%, transparent) 0%, transparent 50%),
-    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--series-normal) 14%, transparent) 0%, transparent 60%);
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--series-normal) 20%, transparent) 0%, transparent 50%),
+    radial-gradient(circle at 100% 45%, color-mix(in srgb, var(--series-ot) 16%, transparent) 0%, transparent 55%),
+    radial-gradient(circle at 15% 100%, color-mix(in srgb, var(--series-normal) 14%, transparent) 0%, transparent 55%),
+    radial-gradient(circle at 90% 100%, color-mix(in srgb, var(--series-ot) 14%, transparent) 0%, transparent 50%);
   background-attachment: fixed;
 }
 :root[data-bg-style="glass"] .card,
@@ -612,10 +615,10 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 
 .hero-stats{ display:flex; flex-direction:column; gap:12px; margin-bottom:14px; }
 .hero-stat{
-  background: var(--surface-1); border:1px solid var(--border);
+  background: var(--card-bg); border:1px solid var(--border);
   border-radius: var(--radius-lg); padding: 18px 20px;
-  box-shadow: 0 1px 2px rgba(0,0,0,0.03), 0 8px 20px rgba(0,0,0,0.05);
-  transition: box-shadow .2s ease;
+  box-shadow: var(--card-shadow);
+  transition: box-shadow .2s ease, background-color .2s ease;
   position: relative;
   overflow: hidden;
 }
@@ -644,9 +647,10 @@ input:disabled{ opacity:.5; cursor:not-allowed; }
 .stat-grid--secondary{ grid-template-columns: repeat(2,1fr); }
 .stat-grid > .stat-tile{ min-width:0; }
 .stat-tile{
-  background: var(--surface-1); border:1px solid var(--border);
+  background: var(--card-bg); border:1px solid var(--border);
   border-radius: var(--radius-md); padding: 12px 8px; text-align:center;
-  transition: box-shadow .2s ease;
+  box-shadow: var(--card-shadow);
+  transition: box-shadow .2s ease, background-color .2s ease;
 }
 .stat-tile__label{ font-size:11px; color: var(--text-muted); font-weight:600; margin-bottom:6px; }
 .stat-tile__value{ font-size:17px; font-weight:800; color: var(--text-primary); }
