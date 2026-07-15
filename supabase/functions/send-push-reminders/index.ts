@@ -38,7 +38,12 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 
 interface OtSettingsRow {
   user_id: string;
-  data: { notifyEnabled?: boolean; normalEnd?: string } | null;
+  data: {
+    notifyEnabled?: boolean;
+    normalEnd?: string;
+    hasMandatoryOt?: boolean;
+    mandatoryOtEnd?: string;
+  } | null;
   timezone: string | null;
   last_reminder_sent_date: string | null;
 }
@@ -144,7 +149,15 @@ Deno.serve(async (req) => {
     const normalEnd = row.data?.normalEnd;
     if (!normalEnd) return; // ยังไม่ได้ตั้งเวลาเลิกงานปกติ
 
-    const targetMinutes = parseTimeToMinutes(normalEnd);
+    // ถ้าเปิด "บังคับ OT" ไว้ เวลาที่ควรเตือนคือเวลาสิ้นสุด OT บังคับ
+    // (mandatoryOtEnd) ไม่ใช่เวลาเลิกงานปกติ - ต้องคำนวณให้ตรงกับที่ client
+    // ใช้ใน effectiveSchedule() (js/app.js) ไม่งั้นคนที่ติ๊กบังคับ OT จะไม่มี
+    // ทางได้รับแจ้งเตือนเลย เพราะ window 15 นาทีปิดไปตั้งแต่เวลาเลิกงานปกติแล้ว
+    const effectiveEnd = row.data?.hasMandatoryOt && row.data?.mandatoryOtEnd
+      ? row.data.mandatoryOtEnd
+      : normalEnd;
+
+    const targetMinutes = parseTimeToMinutes(effectiveEnd);
     if (targetMinutes === null) return;
 
     const timeZone = row.timezone || DEFAULT_TIMEZONE;

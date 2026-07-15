@@ -2476,7 +2476,7 @@
   // yet, seed it from whatever's already in localStorage on this device;
   // otherwise the cloud is treated as authoritative and overwrites local.
   function initialSyncOnLogin(userId) {
-    Promise.all([
+    return Promise.all([
       supabaseClient.from("ot_settings").select("user_id").eq("user_id", userId).maybeSingle(),
       supabaseClient.from("ot_entries").select("id", { count: "exact", head: true }).eq("user_id", userId)
     ]).then(function (results) {
@@ -2511,15 +2511,21 @@
       syncStatus = "syncing";
       syncErrorNotified = false;
       renderSyncStatus();
-      initialSyncOnLogin(userId);
+      // Wait for the cloud settings pull to land before deciding whether to
+      // (re)subscribe/disable push - otherwise refreshPushToggleState can
+      // race ahead of pullStateFromCloud and persist a stale local
+      // notifyEnabled value that immediately gets clobbered by (or
+      // clobbers) the real cloud value.
+      initialSyncOnLogin(userId).then(refreshPushToggleState);
     } else if (!userId) {
       currentUserId = null;
       syncStatus = "idle";
       renderSyncStatus();
+      refreshPushToggleState();
     } else {
       renderSyncStatus();
+      refreshPushToggleState();
     }
-    refreshPushToggleState();
   }
 
   if (supabaseClient) {
@@ -2607,11 +2613,14 @@
 
     // The late-clock-out reminder is delivered entirely server-side over
     // Push, so it can't mean anything without an active subscription - if
-    // Push just got disabled (or never was), force it off and lock the
-    // toggle so the UI never shows it as enabled with nothing to deliver it.
+    // Push is confirmed off, force it off and lock the toggle so the UI
+    // never shows it as enabled with nothing to deliver it. (refreshPushToggleState
+    // already tries to silently re-subscribe before calling this with
+    // subscribed=false, so by the time we get here it's a real disable.)
     if (!subscribed && state.settings.notifyEnabled) {
       state.settings.notifyEnabled = false;
       persistSettings();
+      showToast("⚠️ การแจ้งเตือนแบบ Push ถูกปิดไป (อุปกรณ์นี้ไม่มี subscription ที่ใช้งานได้) กรุณาเปิดใหม่อีกครั้ง");
     }
     els.sNotifyLateOut.disabled = !subscribed;
     els.sNotifyLateOut.checked = !!subscribed && !!state.settings.notifyEnabled;
@@ -2620,7 +2629,14 @@
   // Re-derives the toggle state from the Service Worker's actual
   // subscription (source of truth) rather than trusting any locally
   // cached flag - a subscription can be revoked outside the app (e.g.
-  // browser settings) so this is called after every relevant change.
+  // browser settings, a Service Worker update, or iOS PWA eviction) so
+  // this is called after every relevant change. If no subscription is
+  // found but the user clearly intended push to stay on (notifyEnabled
+  // is true and Notification permission is still granted), try to
+  // silently re-subscribe first instead of immediately disabling
+  // notifications for the whole account - most "it turned itself off"
+  // cases are just the browser dropping the subscription, not the user
+  // opting out.
   function refreshPushToggleState() {
     if (!pushSupported()) {
       updatePushToggleAvailability(false);
@@ -2629,7 +2645,22 @@
     navigator.serviceWorker.ready.then(function (reg) {
       return reg.pushManager.getSubscription();
     }).then(function (sub) {
-      updatePushToggleAvailability(!!sub);
+      if (sub) {
+        updatePushToggleAvailability(true);
+        return;
+      }
+      var canAutoResubscribe = currentUserId && state.settings.notifyEnabled &&
+        typeof Notification !== "undefined" && Notification.permission === "granted";
+      if (!canAutoResubscribe) {
+        updatePushToggleAvailability(false);
+        return;
+      }
+      subscribeToPush().then(function () {
+        updatePushToggleAvailability(true);
+      }).catch(function (err) {
+        console.error("ต่ออายุ Push subscription อัตโนมัติไม่สำเร็จ", err);
+        updatePushToggleAvailability(false);
+      });
     }).catch(function () {
       updatePushToggleAvailability(false);
     });
