@@ -303,6 +303,13 @@ select{
   font-size: 16px; /* avoid iOS zoom on focus */
   transition: outline-color .15s ease, border-color .15s ease;
 }
+input[type="date"],
+input[type="time"]{
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 46px;
+  line-height: 1.3;
+}
 input:focus, select:focus{
   outline: 2px solid var(--series-normal);
   outline-offset: 1px;
