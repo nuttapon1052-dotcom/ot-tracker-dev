@@ -1,6 +1,6 @@
 {
-  "name": "OT Tracker - บันทึกเวลาทำงานและคำนวณโอที",
-  "short_name": "OT Tracker",
+  "name": "OT Fast - บันทึกเวลาทำงานและคำนวณโอที",
+  "short_name": "OT Fast",
   "description": "แอปบันทึกเวลาเข้า-ออกงาน คำนวณชั่วโมงทำงานปกติและโอทีอัตโนมัติ",
   "id": "./",
   "start_url": "./index.html",

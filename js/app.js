@@ -812,7 +812,7 @@
    * ========================================================== */
   function updateHeaderTitle() {
     var name = (state.settings.recorderName || "").trim();
-    els.headerTitle.textContent = name ? "OT Tracker — " + name : "OT Tracker";
+    els.headerTitle.textContent = name ? "OT Fast — " + name : "OT Fast";
   }
 
   /* ============================================================
@@ -2080,7 +2080,7 @@
       if (note.startDate !== tomorrowISO) return;
       if (notified.ids.indexOf(note.id) !== -1) return;
       try {
-        new Notification("OT Tracker", { body: "🔔 พรุ่งนี้: " + note.title });
+        new Notification("OT Fast", { body: "🔔 พรุ่งนี้: " + note.title });
       } catch (e) {
         console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
       }

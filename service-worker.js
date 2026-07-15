@@ -1,4 +1,4 @@
-var CACHE_NAME = "ot-tracker-cache-v8";
+var CACHE_NAME = "ot-tracker-cache-v9";
 var APP_SHELL = [
   "./",
   "./index.html",
@@ -71,7 +71,7 @@ self.addEventListener("push", function (event) {
     try { data = event.data.json(); } catch (e) { data = { body: event.data.text() }; }
   }
 
-  var title = data.title || "OT Tracker";
+  var title = data.title || "OT Fast";
   var options = {
     body: data.body || "",
     icon: "./icons/icon-192.png",

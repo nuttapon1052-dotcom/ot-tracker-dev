@@ -1,0 +1,7 @@
+<svg width="512" height="512" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="OT Fast">
+  <rect width="64" height="64" fill="#FF6B4A"/>
+  <g transform="translate(32,32) scale(0.7) translate(-32,-32)">
+    <text x="29" y="37" font-family="'Space Grotesk', sans-serif" font-size="27" font-weight="700" fill="#FFFFFF" text-anchor="middle">OT</text>
+    <path d="M48 36 L41 46 L45 46 L43 54 L52 43 L47 43 Z" fill="#00C9A7"/>
+  </g>
+</svg>

@@ -217,7 +217,7 @@ Deno.serve(async (req) => {
     }
 
     const payload = JSON.stringify({
-      title: "OT Tracker",
+      title: "OT Fast",
       body: "⏰ ถึงเวลาเลิกงานแล้ว อย่าลืมบันทึกเวลาทำงานวันนี้",
     });
 
