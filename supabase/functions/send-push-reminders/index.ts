@@ -28,6 +28,13 @@ const DEFAULT_TIMEZONE = "Asia/Bangkok";
 // แต่ควรตั้งให้ >= ความถี่ cron เสมอ
 const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 15;
 
+// รอกี่นาทีหลัง "เวลาเลิกงาน/เวลาสิ้นสุด OT บังคับ" ถึงจะเตือน - ตั้งไว้ 15 นาที
+// ตามที่ผู้ใช้ต้องการ (เลิกงาน 20:00 -> เตือน 20:15) ไม่ใช่เตือนตอน 20:00 พอดี
+// จุดสำคัญ: ค่านี้ควรเป็นจำนวนเท่าของความถี่ cron (15 นาที) เพื่อให้เวลาเป้าหมาย
+// (end + delay) ตกลงบนจังหวะที่ cron รันพอดีเมื่อเวลาเลิกงานเป็นจำนวนเท่าของ 15
+// เตือนได้แค่วันละครั้งอยู่แล้วผ่าน last_reminder_sent_date ด้านล่าง
+const REMINDER_DELAY_MINUTES = Number(Deno.env.get("REMINDER_DELAY_MINUTES")) || 15;
+
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
     "mailto:test@example.com",
@@ -157,8 +164,12 @@ Deno.serve(async (req) => {
       ? row.data.mandatoryOtEnd
       : normalEnd;
 
-    const targetMinutes = parseTimeToMinutes(effectiveEnd);
-    if (targetMinutes === null) return;
+    const endMinutes = parseTimeToMinutes(effectiveEnd);
+    if (endMinutes === null) return;
+
+    // เตือน "หลังเลิกงาน REMINDER_DELAY_MINUTES นาที" ไม่ใช่ตอนเลิกงานพอดี
+    // เลื่อนเป้าหมายไปข้างหน้าตาม delay แล้ว mod 1440 กันข้ามเที่ยงคืน
+    const targetMinutes = (endMinutes + REMINDER_DELAY_MINUTES) % 1440;
 
     const timeZone = row.timezone || DEFAULT_TIMEZONE;
     let dateISO: string;
@@ -169,7 +180,7 @@ Deno.serve(async (req) => {
       ({ dateISO, minutesOfDay } = getZonedDateAndMinutes(now, DEFAULT_TIMEZONE));
     }
 
-    // ยังไม่ถึงเวลาเลิกงาน หรือเลยมาเกิน window ที่ยอมรับแล้ว
+    // ยังไม่ถึงเวลาเตือน (เลิกงาน + delay) หรือเลยมาเกิน window ที่ยอมรับแล้ว
     const elapsed = minutesSince(targetMinutes, minutesOfDay);
     if (elapsed > REMINDER_WINDOW_MINUTES) return;
 
