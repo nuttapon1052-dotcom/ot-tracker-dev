@@ -8,7 +8,12 @@ create table ot_settings (
   -- client จะ upsert ทับคอลัมน์ data ทั้งก้อนทุกครั้งที่ผู้ใช้แก้ settings
   -- ถ้าเก็บไว้ใน data ค่าที่ server เขียนจะหายไปตอน sync รอบถัดไป
   timezone text not null default 'Asia/Bangkok',
-  last_reminder_sent_date date
+  -- (เลิกใช้แล้ว) เดิมเก็บแค่ "วันที่เตือนไปแล้ว" -> เตือนได้วันละครั้ง
+  last_reminder_sent_date date,
+  -- สลอตล่าสุดที่เตือนไปแล้ว = "<วันที่ท้องถิ่น>T<notifyTime>" เช่น
+  -- "2026-07-16T18:15" ทำให้ผู้ใช้เลื่อนเวลาเตือนในวันเดียวกัน (เช่นทำ OT ต่อ)
+  -- แล้วได้รับเตือนซ้ำที่เวลาใหม่ได้ ดู supabase/functions/send-push-reminders
+  last_reminder_slot text
 );
 
 -- ตารางเก็บรายการบันทึกเวลา (หลายแถวต่อ 1 user)

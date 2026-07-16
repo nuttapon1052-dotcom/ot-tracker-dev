@@ -44,7 +44,11 @@ interface OtSettingsRow {
     notifyTime?: string;
   } | null;
   timezone: string | null;
-  last_reminder_sent_date: string | null;
+  // "สลอต" ล่าสุดที่เตือนไปแล้ว = "<วันที่ท้องถิ่น>T<notifyTime>" เช่น
+  // "2026-07-16T18:15" ใช้กันเตือนซ้ำแบบอิงทั้งวันที่และเวลาที่ตั้ง เพื่อให้
+  // ผู้ใช้เลื่อนเวลาเตือนในวันเดียวกัน (เช่นทำ OT ต่อ) แล้วได้รับเตือนซ้ำที่
+  // เวลาใหม่ได้ - แต่ยังกันสแปมภายในเวลาเดิม (สลอตเดิม) อยู่
+  last_reminder_slot: string | null;
 }
 
 interface PushSubscriptionRow {
@@ -122,7 +126,7 @@ Deno.serve(async (req) => {
   // ขั้น 1: ดึงเฉพาะ user ที่เปิด notifyEnabled ไว้ใน ot_settings.data
   const { data: settingsRows, error: settingsError } = await supabaseAdmin
     .from("ot_settings")
-    .select("user_id, data, timezone, last_reminder_sent_date")
+    .select("user_id, data, timezone, last_reminder_slot")
     .eq("data->>notifyEnabled", "true");
 
   if (settingsError) {
@@ -166,8 +170,12 @@ Deno.serve(async (req) => {
     const elapsed = minutesSince(targetMinutes, minutesOfDay);
     if (elapsed > REMINDER_WINDOW_MINUTES) return;
 
-    // เคยส่งเตือนของวันนี้ (ตามเวลาท้องถิ่นของ user) ไปแล้ว - กันส่งซ้ำ
-    if (row.last_reminder_sent_date === dateISO) {
+    // สลอตของการเตือนรอบนี้ = วันที่ท้องถิ่น + เวลาที่ผู้ใช้ตั้ง ถ้าผู้ใช้เลื่อน
+    // notifyTime เป็นเวลาใหม่ในวันเดียวกัน สลอตจะเปลี่ยน -> ได้เตือนซ้ำที่เวลาใหม่
+    // ถ้าสลอตเดิม (เวลาเดิม วันเดิม) แปลว่าเตือนไปแล้ว -> กันส่งซ้ำ (กันสแปมทั้ง
+    // window ของเวลานั้น)
+    const slot = `${dateISO}T${notifyTime}`;
+    if (row.last_reminder_slot === slot) {
       summary.alreadySentToday++;
       return;
     }
@@ -256,7 +264,7 @@ Deno.serve(async (req) => {
     if (anySuccess) {
       await supabaseAdmin
         .from("ot_settings")
-        .update({ last_reminder_sent_date: dateISO })
+        .update({ last_reminder_slot: slot })
         .eq("user_id", row.user_id);
     }
   }));
