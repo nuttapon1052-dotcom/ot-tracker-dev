@@ -243,9 +243,14 @@ Deno.serve(async (req) => {
       return;
     }
 
+    // tag คงที่ต่อวัน+user - กันเคส device เดียวกันมี subscription ค้างอยู่หลาย
+    // endpoint (เช่น subscribe ใหม่ทุกครั้งที่ service worker อัปเดต/ล้าง cache
+    // โดยของเก่าไม่เคยโดน 404 เลยไม่ถูกลบ) แล้วโดนส่งซ้ำเข้าเครื่องเดียวกัน 2
+    // endpoint - ใส่ tag ให้ service worker ยุบ notification ที่ซ้ำเป็นอันเดียว
     const payload = JSON.stringify({
       title: "OT Fast",
       body: "⏰ อย่าลืมจดบันทึก OT ของวันนี้",
+      tag: `leave-work-${slot}`,
     });
 
     const staleSubIds: string[] = [];

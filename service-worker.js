@@ -76,7 +76,10 @@ self.addEventListener("push", function (event) {
     body: data.body || "",
     icon: "./icons/icon-192.png",
     badge: "./icons/icon-192.png",
-    data: data.url ? { url: data.url } : {}
+    data: data.url ? { url: data.url } : {},
+    // ยุบ push ที่ซ้ำ (เช่น device เดียวกันมี subscription endpoint ค้างมากกว่า 1
+    // อัน) ให้เหลือ notification เดียวแทนที่จะโชว์ซ้อนกัน 2 อัน
+    tag: data.tag || title
   };
 
   event.waitUntil(self.registration.showNotification(title, options));

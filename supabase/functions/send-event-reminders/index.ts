@@ -169,9 +169,12 @@ Deno.serve(async (req) => {
         continue; // ยังไม่เปิด Push เลย ข้าม (ยังไม่มาร์ค sent จะได้ส่งได้เมื่อสมัคร)
       }
 
+      // tag ต่อ note - กัน device เดียวกันที่มี subscription ค้างหลาย endpoint
+      // โดนส่งซ้ำเข้าเครื่องเดียวกัน (ดูเหตุผลเดียวกันใน send-push-reminders)
       const payload = JSON.stringify({
         title: `🔔 ${note.title}`,
         body: note.description || "ถึงเวลาสำหรับเหตุการณ์ที่คุณบันทึกไว้",
+        tag: `event-${note.id}`,
       });
 
       let anySuccess = false;
