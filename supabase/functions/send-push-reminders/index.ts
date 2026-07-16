@@ -217,6 +217,32 @@ Deno.serve(async (req) => {
       return;
     }
 
+    // จอง (claim) สลอตนี้แบบ atomic ก่อนส่งจริง กันเคส cron ยิงทับกัน (เช่น
+    // invocation ก่อนหน้ายังไม่ทันเขียน last_reminder_slot กลับเพราะ webpush
+    // ช้า/cold start นานเกิน 1 นาที แล้ว cron รอบถัดไปมาอ่านค่าที่ยังไม่อัปเดต
+    // เจอ -> ส่งซ้ำ) เดิมโค้ดเขียน last_reminder_slot "หลัง" ส่งสำเร็จเท่านั้น
+    // ทำให้มีช่วง race ระหว่างอ่าน (เช็ค row.last_reminder_slot ด้านบน) กับเขียน
+    // ยาวเท่าเวลาที่ใช้ส่ง push ทั้งหมด - ย้ายมาจองก่อนส่งแทน โดยใช้เงื่อนไข
+    // WHERE ที่ยึด row เดียวกัน (Postgres lock แถวระหว่าง UPDATE ให้เอง) ทำให้มี
+    // แค่ invocation เดียวที่จองสำเร็จ (ได้ row กลับมา) ส่วนอีก invocation ที่มาซ้ำ
+    // จะ update ไม่โดนแถวไหนเลย (0 rows) เพราะค่าที่ WHERE เช็คถูกเปลี่ยนไปแล้ว
+    const { data: claimedRows, error: claimError } = await supabaseAdmin
+      .from("ot_settings")
+      .update({ last_reminder_slot: slot })
+      .eq("user_id", row.user_id)
+      .or(`last_reminder_slot.is.null,last_reminder_slot.neq.${slot}`)
+      .select("user_id");
+
+    if (claimError) {
+      summary.errors.push({ user_id: row.user_id, error: claimError.message });
+      return;
+    }
+    if (!claimedRows || claimedRows.length === 0) {
+      // มี invocation อื่นจอง/ส่งสลอตนี้ไปแล้ว (ชนกันตอน cron ยิงทับ) - ข้าม
+      summary.alreadySentToday++;
+      return;
+    }
+
     const payload = JSON.stringify({
       title: "OT Fast",
       body: "⏰ อย่าลืมจดบันทึก OT ของวันนี้",
@@ -256,16 +282,19 @@ Deno.serve(async (req) => {
       await supabaseAdmin.from("push_subscriptions").delete().in("id", staleSubIds);
     }
 
-    // มาร์ค "เตือนวันนี้แล้ว" เฉพาะเมื่อส่งสำเร็จอย่างน้อย 1 เครื่องเท่านั้น
-    // ถ้าทุกเครื่องล้มเหลว (เช่น subscription เดียวที่มีหมดอายุไปแล้ว) อย่าเพิ่ง
-    // มาร์ค เพื่อให้ cron รอบถัดไปในช่วง window เดิมยังลองใหม่ได้ - เผื่ออุปกรณ์
-    // เพิ่ง self-heal สมัคร subscription ใหม่เข้ามา (ดู ensurePushSubscription
-    // ฝั่ง client) ก็จะยิงถึงในรอบถัดไปได้ ไม่ตกหล่นทั้งวัน
-    if (anySuccess) {
+    // จองสลอตไปแล้วก่อนส่ง (ดูด้านบน) ถ้าส่งสำเร็จอย่างน้อย 1 เครื่องก็จบ ปล่อย
+    // ค่าที่จองไว้อยู่แบบนั้น แต่ถ้าทุกเครื่องล้มเหลวหมด (เช่น subscription เดียว
+    // ที่มีหมดอายุไปแล้ว) ให้คืนสลอตกลับเป็นค่าเดิม เพื่อให้ cron รอบถัดไปใน
+    // window เดิมยังลองจองใหม่ได้ - เผื่ออุปกรณ์เพิ่ง self-heal สมัคร subscription
+    // ใหม่เข้ามา (ดู ensurePushSubscription ฝั่ง client) ก็จะยิงถึงในรอบถัดไปได้
+    // ไม่ตกหล่นทั้งวัน (เช็ค .eq last_reminder_slot เดิมด้วย กันเผลอทับค่าที่
+    // invocation อื่นเพิ่งจองสลอตใหม่ทับไปแล้ว)
+    if (!anySuccess) {
       await supabaseAdmin
         .from("ot_settings")
-        .update({ last_reminder_slot: slot })
-        .eq("user_id", row.user_id);
+        .update({ last_reminder_slot: row.last_reminder_slot })
+        .eq("user_id", row.user_id)
+        .eq("last_reminder_slot", slot);
     }
   }));
 
