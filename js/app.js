@@ -2507,6 +2507,18 @@
     };
   }
 
+  // เดา IANA timezone จริงของเครื่อง (เช่น "Asia/Seoul") จาก Intl ของ browser
+  // - ot_settings.timezone เดิม default เป็น "Asia/Bangkok" เสมอเพราะไม่เคยมี
+  // โค้ดฝั่ง client เขียนค่านี้เลย ทำให้ send-push-reminders/send-event-reminders
+  // (ฝั่ง server) คำนวณเวลาแจ้งเตือนผิดเขตเวลาสำหรับผู้ใช้ที่อยู่นอกไทย
+  function detectTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // Mirrors the full local state up to Supabase: upserts the single
   // settings row, then replaces all of this user's ot_entries rows
   // wholesale (delete + reinsert) rather than diffing them - simple and
@@ -2518,9 +2530,12 @@
     var userId = currentUserId;
     syncStatus = "syncing";
     renderSyncStatus();
+    var settingsRow = { user_id: userId, data: state.settings, updated_at: new Date().toISOString() };
+    var tz = detectTimeZone();
+    if (tz) settingsRow.timezone = tz;
     supabaseClient
       .from("ot_settings")
-      .upsert({ user_id: userId, data: state.settings, updated_at: new Date().toISOString() })
+      .upsert(settingsRow)
       .then(function (res) {
         if (res.error) throw res.error;
         return supabaseClient.from("ot_entries").delete().eq("user_id", userId);
