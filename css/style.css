@@ -241,6 +241,28 @@ input, select, button{ font-family: inherit; }
 .btn--theme svg{ width:18px; height:18px; display:block; }
 .btn svg{ width:16px; height:16px; flex-shrink:0; display:block; }
 
+/* ============ Auth gate ============ */
+.auth-gate{
+  min-height: 100vh;
+  min-height: 100dvh;
+  display:flex; align-items:center; justify-content:center;
+  padding: 24px;
+}
+.auth-gate__card{
+  width:100%; max-width: 340px;
+  text-align:center;
+  display:flex; flex-direction:column; align-items:center; gap:14px;
+}
+.auth-gate__logo{ width:56px; height:56px; }
+.auth-gate__logo svg{ width:56px; height:56px; display:block; }
+.auth-gate__title{
+  margin:0; font-size:22px; font-weight:800; letter-spacing:-.01em;
+  color: var(--text-primary);
+}
+.auth-gate__hint{
+  margin:0 0 4px; font-size:14px; color: var(--text-secondary);
+}
+
 /* ============ Layout ============ */
 .main{
   max-width: 560px;

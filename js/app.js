@@ -625,6 +625,10 @@
     importInput: $("importInput"),
     clearBtn: $("clearBtn"),
 
+    authGate: $("authGate"),
+    authGateHint: $("authGateHint"),
+    gateLoginBtn: $("gateLoginBtn"),
+    main: $("main"),
     authSignedOut: $("authSignedOut"),
     authSignedIn: $("authSignedIn"),
     googleLoginBtn: $("googleLoginBtn"),
@@ -2398,6 +2402,33 @@
     els.userEmailDisplay.textContent = signedIn ? session.user.email : "";
   }
 
+  // Login is mandatory: the whole app sits behind this gate so a device
+  // that was last used by someone else's Google account never shows their
+  // data to whoever opens the site next (they have to sign in as
+  // themselves first).
+  function showGate(showLoginButton) {
+    els.main.classList.add("hidden");
+    els.tabbar.classList.add("hidden");
+    els.authGate.classList.remove("hidden");
+    els.authGateHint.textContent = showLoginButton
+      ? "เข้าสู่ระบบด้วย Google เพื่อใช้งาน OT Fast"
+      : "กำลังตรวจสอบสถานะเข้าสู่ระบบ...";
+    els.gateLoginBtn.classList.toggle("hidden", !showLoginButton);
+  }
+
+  function revealApp() {
+    els.authGate.classList.add("hidden");
+    els.main.classList.remove("hidden");
+    els.tabbar.classList.remove("hidden");
+  }
+
+  // Remembers which account last used this browser, purely to guard the
+  // "cloud empty -> seed from local" path in initialSyncOnLogin: without
+  // it, a shared device where person A used the app and then person B logs
+  // in with their own (empty) cloud account would upload A's leftover
+  // localStorage data into B's account.
+  var LAST_USER_KEY = "ot-tracker-last-uid-v1";
+
   /* ------------ Cloud sync status (icon + banner + retry) ------------
    * Purely a UI layer on top of pushStateToCloud() below - never affects
    * whether/when data gets saved locally (saveState() always writes to
@@ -2646,29 +2677,49 @@
       syncStatus = "syncing";
       syncErrorNotified = false;
       renderSyncStatus();
+      showGate(false);
+      var lastUid = null;
+      try { lastUid = localStorage.getItem(LAST_USER_KEY); } catch (e) {}
+      if (lastUid && lastUid !== userId) {
+        // A different account was last signed in on this browser - wipe the
+        // local cache first so, if this account's cloud row turns out to be
+        // empty, initialSyncOnLogin seeds it with a blank state instead of
+        // the previous account's leftover data.
+        state = clone(DEFAULT_STATE);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      }
       // Wait for the cloud settings pull to land before syncing the
       // notification UI, so the leave-work toggle reflects the authoritative
       // cloud notifyEnabled value (not a stale local one) and the push
-      // self-heal runs against the right account.
-      initialSyncOnLogin(userId).then(syncNotificationUI);
+      // self-heal runs against the right account. Only reveal the app once
+      // this settles, so nobody ever sees a flash of stale local data before
+      // the cloud state (or the reset above) takes effect.
+      initialSyncOnLogin(userId).then(function () {
+        try { localStorage.setItem(LAST_USER_KEY, userId); } catch (e) {}
+        revealApp();
+      }).then(syncNotificationUI);
     } else if (!userId) {
       currentUserId = null;
       syncStatus = "idle";
       renderSyncStatus();
       syncNotificationUI();
+      showGate(true);
     } else {
       renderSyncStatus();
       syncNotificationUI();
+      revealApp();
     }
   }
 
   if (supabaseClient) {
-    els.googleLoginBtn.addEventListener("click", function () {
+    var handleGoogleLoginClick = function () {
       supabaseClient.auth.signInWithOAuth({
         provider: "google",
         options: { redirectTo: window.location.origin + window.location.pathname }
       });
-    });
+    };
+    els.googleLoginBtn.addEventListener("click", handleGoogleLoginClick);
+    els.gateLoginBtn.addEventListener("click", handleGoogleLoginClick);
 
     els.logoutBtn.addEventListener("click", function () {
       supabaseClient.auth.signOut();
@@ -2695,6 +2746,10 @@
   } else {
     els.googleLoginBtn.disabled = true;
     els.googleLoginBtn.textContent = "ต้องเชื่อมต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ";
+    els.gateLoginBtn.disabled = true;
+    els.gateLoginBtn.textContent = "ต้องเชื่อมต่ออินเทอร์เน็ตเพื่อเข้าสู่ระบบ";
+    els.gateLoginBtn.classList.remove("hidden");
+    els.authGateHint.textContent = "ไม่สามารถเชื่อมต่อระบบเข้าสู่ระบบได้ในขณะนี้";
   }
 
   /* ============================================================
