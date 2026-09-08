@@ -20,13 +20,13 @@ const REMINDER_AUTH_KEY = Deno.env.get("REMINDER_AUTH_KEY");
 // ค่าเริ่มต้น timezone เมื่อ user ยังไม่เคยตั้งไว้ใน ot_settings.timezone
 const DEFAULT_TIMEZONE = "Asia/Bangkok";
 
-// ยอมให้ "เลยเวลาเลิกงาน" มาได้กี่นาทีแล้วยังนับว่าต้องเตือน - ตั้งไว้ 15 นาที
-// ให้เท่ากับความถี่ของ pg_cron (ทุก 15 นาที) ไม่ใช่ 5-10 นาที เพราะถ้า cron
-// รันทุก 15 นาทีแต่ window แคบกว่านั้น จะมีบางเวลาเลิกงานที่ตกหล่นไปเลย (เช่น
-// เลิกงาน 17:01 แต่ cron รอบถัดไปคือ 17:15 ห่างไป 14 นาที ถ้า window = 10
-// นาทีก็จะพลาดรอบนั้นไปเฉยๆ) ปรับได้ผ่าน secret REMINDER_WINDOW_MINUTES
-// แต่ควรตั้งให้ >= ความถี่ cron เสมอ
-const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 15;
+// ยอมให้ "เลยเวลาเป้าหมาย (notifyTime ที่ผู้ใช้ตั้งเอง)" มาได้กี่นาทีแล้วยังนับ
+// ว่าต้องเตือน pg_cron รันทุก 1 นาที (ดู migration 20260715000000) เป้าหมายคือยิง
+// ตรงนาที notifyTime พอดี แต่เผื่อ window ไว้กว้างพอควรกัน cron ยิงช้า/ตกหล่นหลาย
+// tick แล้วไม่หลุดทั้งวัน (กันซ้ำด้วย last_reminder_sent_date อยู่แล้ว) - ตั้ง
+// default 120 นาที เพื่อทนต่อ cron สะดุด แต่ยังไม่เตือนดึกเกินจริง
+// ⚠️ window ต้อง >= ความถี่ cron (1 นาที) เสมอ ปรับได้ผ่าน secret REMINDER_WINDOW_MINUTES
+const REMINDER_WINDOW_MINUTES = Number(Deno.env.get("REMINDER_WINDOW_MINUTES")) || 120;
 
 if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   webpush.setVapidDetails(
@@ -38,9 +38,17 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 
 interface OtSettingsRow {
   user_id: string;
-  data: { notifyEnabled?: boolean; normalEnd?: string } | null;
+  data: {
+    notifyEnabled?: boolean;
+    // เวลาที่ผู้ใช้ตั้งเองว่าจะให้เตือนกี่โมง (HH:MM ตาม timezone ของ user)
+    notifyTime?: string;
+  } | null;
   timezone: string | null;
-  last_reminder_sent_date: string | null;
+  // "สลอต" ล่าสุดที่เตือนไปแล้ว = "<วันที่ท้องถิ่น>T<notifyTime>" เช่น
+  // "2026-07-16T18:15" ใช้กันเตือนซ้ำแบบอิงทั้งวันที่และเวลาที่ตั้ง เพื่อให้
+  // ผู้ใช้เลื่อนเวลาเตือนในวันเดียวกัน (เช่นทำ OT ต่อ) แล้วได้รับเตือนซ้ำที่
+  // เวลาใหม่ได้ - แต่ยังกันสแปมภายในเวลาเดิม (สลอตเดิม) อยู่
+  last_reminder_slot: string | null;
 }
 
 interface PushSubscriptionRow {
@@ -118,7 +126,7 @@ Deno.serve(async (req) => {
   // ขั้น 1: ดึงเฉพาะ user ที่เปิด notifyEnabled ไว้ใน ot_settings.data
   const { data: settingsRows, error: settingsError } = await supabaseAdmin
     .from("ot_settings")
-    .select("user_id, data, timezone, last_reminder_sent_date")
+    .select("user_id, data, timezone, last_reminder_slot")
     .eq("data->>notifyEnabled", "true");
 
   if (settingsError) {
@@ -141,10 +149,12 @@ Deno.serve(async (req) => {
   await Promise.allSettled(rows.map(async (row) => {
     summary.checked++;
 
-    const normalEnd = row.data?.normalEnd;
-    if (!normalEnd) return; // ยังไม่ได้ตั้งเวลาเลิกงานปกติ
+    // เวลาที่ผู้ใช้ตั้งเองว่าจะให้เตือนกี่โมง - เป็นตัวเดียวที่ใช้กำหนดเวลาเตือน
+    // แล้ว (ไม่เกี่ยวกับตารางคำนวณ OT / OT บังคับ / +15 นาที อีกต่อไป)
+    const notifyTime = row.data?.notifyTime;
+    if (!notifyTime) return; // ยังไม่ได้ตั้งเวลาแจ้งเตือน
 
-    const targetMinutes = parseTimeToMinutes(normalEnd);
+    const targetMinutes = parseTimeToMinutes(notifyTime);
     if (targetMinutes === null) return;
 
     const timeZone = row.timezone || DEFAULT_TIMEZONE;
@@ -156,12 +166,16 @@ Deno.serve(async (req) => {
       ({ dateISO, minutesOfDay } = getZonedDateAndMinutes(now, DEFAULT_TIMEZONE));
     }
 
-    // ยังไม่ถึงเวลาเลิกงาน หรือเลยมาเกิน window ที่ยอมรับแล้ว
+    // ยังไม่ถึงเวลาเตือน (notifyTime) หรือเลยมาเกิน window ที่ยอมรับแล้ว
     const elapsed = minutesSince(targetMinutes, minutesOfDay);
     if (elapsed > REMINDER_WINDOW_MINUTES) return;
 
-    // เคยส่งเตือนของวันนี้ (ตามเวลาท้องถิ่นของ user) ไปแล้ว - กันส่งซ้ำ
-    if (row.last_reminder_sent_date === dateISO) {
+    // สลอตของการเตือนรอบนี้ = วันที่ท้องถิ่น + เวลาที่ผู้ใช้ตั้ง ถ้าผู้ใช้เลื่อน
+    // notifyTime เป็นเวลาใหม่ในวันเดียวกัน สลอตจะเปลี่ยน -> ได้เตือนซ้ำที่เวลาใหม่
+    // ถ้าสลอตเดิม (เวลาเดิม วันเดิม) แปลว่าเตือนไปแล้ว -> กันส่งซ้ำ (กันสแปมทั้ง
+    // window ของเวลานั้น)
+    const slot = `${dateISO}T${notifyTime}`;
+    if (row.last_reminder_slot === slot) {
       summary.alreadySentToday++;
       return;
     }
@@ -177,7 +191,10 @@ Deno.serve(async (req) => {
       .select("id", { count: "exact", head: true })
       .eq("user_id", row.user_id)
       .eq("date", dateISO)
-      .not("time_out", "is", null);
+      .not("time_out", "is", null)
+      // แถวที่ถูกลบไปแล้วต้องไม่นับว่า "บันทึกเวลาออกงานแล้ว" ไม่งั้นผู้ใช้ที่ลบ
+      // รายการของวันนี้ทิ้งจะไม่ได้รับการเตือนให้จดบันทึก
+      .is("deleted_at", null);
 
     if (entryError) {
       summary.errors.push({ user_id: row.user_id, error: entryError.message });
@@ -203,12 +220,44 @@ Deno.serve(async (req) => {
       return;
     }
 
+    // จอง (claim) สลอตนี้แบบ atomic ก่อนส่งจริง กันเคส cron ยิงทับกัน (เช่น
+    // invocation ก่อนหน้ายังไม่ทันเขียน last_reminder_slot กลับเพราะ webpush
+    // ช้า/cold start นานเกิน 1 นาที แล้ว cron รอบถัดไปมาอ่านค่าที่ยังไม่อัปเดต
+    // เจอ -> ส่งซ้ำ) เดิมโค้ดเขียน last_reminder_slot "หลัง" ส่งสำเร็จเท่านั้น
+    // ทำให้มีช่วง race ระหว่างอ่าน (เช็ค row.last_reminder_slot ด้านบน) กับเขียน
+    // ยาวเท่าเวลาที่ใช้ส่ง push ทั้งหมด - ย้ายมาจองก่อนส่งแทน โดยใช้เงื่อนไข
+    // WHERE ที่ยึด row เดียวกัน (Postgres lock แถวระหว่าง UPDATE ให้เอง) ทำให้มี
+    // แค่ invocation เดียวที่จองสำเร็จ (ได้ row กลับมา) ส่วนอีก invocation ที่มาซ้ำ
+    // จะ update ไม่โดนแถวไหนเลย (0 rows) เพราะค่าที่ WHERE เช็คถูกเปลี่ยนไปแล้ว
+    const { data: claimedRows, error: claimError } = await supabaseAdmin
+      .from("ot_settings")
+      .update({ last_reminder_slot: slot })
+      .eq("user_id", row.user_id)
+      .or(`last_reminder_slot.is.null,last_reminder_slot.neq.${slot}`)
+      .select("user_id");
+
+    if (claimError) {
+      summary.errors.push({ user_id: row.user_id, error: claimError.message });
+      return;
+    }
+    if (!claimedRows || claimedRows.length === 0) {
+      // มี invocation อื่นจอง/ส่งสลอตนี้ไปแล้ว (ชนกันตอน cron ยิงทับ) - ข้าม
+      summary.alreadySentToday++;
+      return;
+    }
+
+    // tag คงที่ต่อวัน+user - กันเคส device เดียวกันมี subscription ค้างอยู่หลาย
+    // endpoint (เช่น subscribe ใหม่ทุกครั้งที่ service worker อัปเดต/ล้าง cache
+    // โดยของเก่าไม่เคยโดน 404 เลยไม่ถูกลบ) แล้วโดนส่งซ้ำเข้าเครื่องเดียวกัน 2
+    // endpoint - ใส่ tag ให้ service worker ยุบ notification ที่ซ้ำเป็นอันเดียว
     const payload = JSON.stringify({
-      title: "OT Tracker",
-      body: "⏰ ถึงเวลาเลิกงานแล้ว อย่าลืมบันทึกเวลาทำงานวันนี้",
+      title: "OT Fast",
+      body: "⏰ อย่าลืมจดบันทึก OT ของวันนี้",
+      tag: `leave-work-${slot}`,
     });
 
     const staleSubIds: string[] = [];
+    let anySuccess = false;
     const results = await Promise.allSettled(
       (subs as PushSubscriptionRow[]).map((sub) =>
         webpush.sendNotification(
@@ -222,6 +271,7 @@ Deno.serve(async (req) => {
       const sub = (subs as PushSubscriptionRow[])[i];
       if (r.status === "fulfilled") {
         summary.sent++;
+        anySuccess = true;
         return;
       }
       const reason = r.reason as { statusCode?: number; message?: string };
@@ -240,12 +290,20 @@ Deno.serve(async (req) => {
       await supabaseAdmin.from("push_subscriptions").delete().in("id", staleSubIds);
     }
 
-    // บันทึกว่าเตือนวันนี้ (ตามเวลาท้องถิ่นของ user) ไปแล้ว ไม่ว่าการส่งแต่ละ
-    // อุปกรณ์จะสำเร็จครบทุกตัวหรือไม่ - กันไม่ให้ยิงซ้ำทุก 15 นาทีในวันเดียวกัน
-    await supabaseAdmin
-      .from("ot_settings")
-      .update({ last_reminder_sent_date: dateISO })
-      .eq("user_id", row.user_id);
+    // จองสลอตไปแล้วก่อนส่ง (ดูด้านบน) ถ้าส่งสำเร็จอย่างน้อย 1 เครื่องก็จบ ปล่อย
+    // ค่าที่จองไว้อยู่แบบนั้น แต่ถ้าทุกเครื่องล้มเหลวหมด (เช่น subscription เดียว
+    // ที่มีหมดอายุไปแล้ว) ให้คืนสลอตกลับเป็นค่าเดิม เพื่อให้ cron รอบถัดไปใน
+    // window เดิมยังลองจองใหม่ได้ - เผื่ออุปกรณ์เพิ่ง self-heal สมัคร subscription
+    // ใหม่เข้ามา (ดู ensurePushSubscription ฝั่ง client) ก็จะยิงถึงในรอบถัดไปได้
+    // ไม่ตกหล่นทั้งวัน (เช็ค .eq last_reminder_slot เดิมด้วย กันเผลอทับค่าที่
+    // invocation อื่นเพิ่งจองสลอตใหม่ทับไปแล้ว)
+    if (!anySuccess) {
+      await supabaseAdmin
+        .from("ot_settings")
+        .update({ last_reminder_slot: row.last_reminder_slot })
+        .eq("user_id", row.user_id)
+        .eq("last_reminder_slot", slot);
+    }
   }));
 
   return Response.json({ message: "ตรวจสอบและส่งแจ้งเตือนเสร็จสิ้น", ...summary });
@@ -265,7 +323,8 @@ Deno.serve(async (req) => {
   ป้องกันไม่ให้ใครก็ได้ที่ถือ anon key มายิงส่ง push แทน user อื่นได้ (ไม่ใช้
   Authorization header เพราะ Supabase gateway จะดักตรวจค่านั้นเองก่อนถึงโค้ดเรา)
 
-  ดูวิธีตั้งค่า pg_cron ให้เรียกฟังก์ชันนี้อัตโนมัติทุก 15 นาทีได้ที่
-  supabase/migrations/20260712000000_push_reminders.sql
+  ดูวิธีตั้งค่า pg_cron ให้เรียกฟังก์ชันนี้อัตโนมัติทุก 1 นาทีได้ที่
+  supabase/migrations/20260715000000_push_reminders_every_minute.sql
+  (ของเดิมรันทุก 15 นาที ดู 20260712000000_push_reminders.sql)
 
 */

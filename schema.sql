@@ -8,7 +8,12 @@ create table ot_settings (
   -- client จะ upsert ทับคอลัมน์ data ทั้งก้อนทุกครั้งที่ผู้ใช้แก้ settings
   -- ถ้าเก็บไว้ใน data ค่าที่ server เขียนจะหายไปตอน sync รอบถัดไป
   timezone text not null default 'Asia/Bangkok',
-  last_reminder_sent_date date
+  -- (เลิกใช้แล้ว) เดิมเก็บแค่ "วันที่เตือนไปแล้ว" -> เตือนได้วันละครั้ง
+  last_reminder_sent_date date,
+  -- สลอตล่าสุดที่เตือนไปแล้ว = "<วันที่ท้องถิ่น>T<notifyTime>" เช่น
+  -- "2026-07-16T18:15" ทำให้ผู้ใช้เลื่อนเวลาเตือนในวันเดียวกัน (เช่นทำ OT ต่อ)
+  -- แล้วได้รับเตือนซ้ำที่เวลาใหม่ได้ ดู supabase/functions/send-push-reminders
+  last_reminder_slot text
 );
 
 -- ตารางเก็บรายการบันทึกเวลา (หลายแถวต่อ 1 user)
@@ -20,7 +25,12 @@ create table ot_entries (
   time_out text,
   ot_multiplier numeric,
   note text,
-  created_at timestamptz default now()
+  created_at timestamptz default now(),
+  -- updated_at/deleted_at เพิ่มโดย migration
+  -- 20260908000000_sync_merge_tombstones.sql - ใช้ให้ sync แบบรวมข้อมูล
+  -- (merge) แทนการทับ deleted_at ไม่ null = ถูกลบแล้ว (soft delete)
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
 );
 
 -- ตารางเก็บบันทึกเหตุการณ์ล่วงหน้า (หลายแถวต่อ 1 user)
@@ -31,7 +41,17 @@ create table work_notes (
   description text,
   start_date date not null,
   end_date date not null,
-  created_at timestamptz default now()
+  -- reminder_sent เพิ่มโดย migration 20260713000000_event_reminders.sql
+  reminder_sent boolean not null default false,
+  -- แจ้งเตือนตามวัน/เวลาที่ผู้ใช้เลือกเอง เพิ่มโดย migration
+  -- 20260715010000_note_custom_reminder.sql (reminder_time = "HH:MM" ตาม tz ผู้ใช้)
+  reminder_enabled boolean not null default false,
+  reminder_date date,
+  reminder_time text,
+  created_at timestamptz default now(),
+  -- ดูหมายเหตุ updated_at/deleted_at ที่ ot_entries ด้านบน
+  updated_at timestamptz not null default now(),
+  deleted_at timestamptz
 );
 
 -- ตารางเก็บ Web Push subscription (หลายแถวต่อ 1 user - 1 แถวต่อ 1 อุปกรณ์/เบราว์เซอร์)

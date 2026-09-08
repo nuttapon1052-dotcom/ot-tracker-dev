@@ -1,4 +1,4 @@
-# OT Tracker — บริบทโปรเจกต์
+# OT Fast — บริบทโปรเจกต์
 
 ## ภาพรวม
 เว็บแอปบันทึกเวลาทำงาน/OT เขียนด้วย vanilla JS (ไม่มี build step, ไม่มี bundler) เป็น PWA มี service worker

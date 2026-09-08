@@ -36,18 +36,38 @@
       defaultTimeOut: "",
       lockTimeIn: false,
       lockTimeOut: false,
-      // late clock-out reminder toggle (server-side Web Push) - persisted
-      // here only; the send-push-reminders Edge Function reads
-      // ot_settings.data.notifyEnabled directly and does all of the actual
-      // "15 min after normalEnd, no time_out yet" scheduling/delivery via
-      // pg_cron (see supabase/functions/send-push-reminders and
-      // supabase/migrations/20260712000000_push_reminders.sql). Requires an
-      // active Push subscription to receive anything (see sNotifyLateOut's
-      // change handler below).
-      notifyEnabled: false
+      // when on, the locked clock-out time is also filled on Sat/Sun instead
+      // of being left blank (see applyWeekendTimeDefault). Only meaningful
+      // while lockTimeOut is on.
+      lockTimeOutWeekend: false,
+      // "จดบันทึก OT" reminder toggle (server-side Web Push). Pure account-level
+      // user intent: changed ONLY when the user flips the sNotifyLateOut switch,
+      // and NEVER cleared by device/subscription state (doing so was the bug
+      // that silently disabled reminders). The send-push-reminders Edge Function
+      // reads ot_settings.data.notifyEnabled + notifyTime directly and fires a
+      // single push at exactly notifyTime each day (if today has no clock-out
+      // yet) via pg_cron - no more "N minutes after the schedule end" math (see
+      // supabase/functions/send-push-reminders). Delivery to a given device
+      // still needs that device to hold a push subscription, which the app
+      // self-heals on load (see ensurePushSubscription).
+      notifyEnabled: false,
+      // exact wall-clock time (HH:MM, user's local tz) the reminder above fires
+      notifyTime: "17:15"
     },
-    entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note }
-    workNotes: [] // { id, title, description, startDate, endDate }
+    entries: [], // { id, date, timeIn, timeOut, otMultiplier(number|null), note, updatedAt }
+    workNotes: [], // { id, title, description, startDate, endDate, reminderEnabled, reminderDate, reminderTime, reminderSent, updatedAt }
+    // Which signed-in account the records below belong to, so this device
+    // can tell "my own data from before I signed in" apart from "the
+    // previous person's data". Merging without this would fold whatever the
+    // last user left in this browser into the next user's account.
+    ownerId: null,
+    // Tombstones - { id, deletedAt } - kept so a delete made on one device
+    // can travel to the others. Without them a merging sync could only ever
+    // add records back: every other device would still hold the deleted row
+    // and would keep re-uploading it. Deliberately kept out of entries/
+    // workNotes so nothing that renders or calculates has to know they exist.
+    deletedEntries: [],
+    deletedNotes: []
   };
 
   var CURRENCIES = {
@@ -197,6 +217,21 @@
       state.settings = Object.assign({}, state.settings, parsed.settings || {});
       state.entries = Array.isArray(parsed.entries) ? parsed.entries : [];
       state.workNotes = Array.isArray(parsed.workNotes) ? parsed.workNotes : [];
+      state.deletedEntries = Array.isArray(parsed.deletedEntries) ? parsed.deletedEntries : [];
+      state.deletedNotes = Array.isArray(parsed.deletedNotes) ? parsed.deletedNotes : [];
+      state.ownerId = parsed.ownerId || null;
+      // Own try/catch: the outer one falls back to an empty DEFAULT_STATE,
+      // so a throw in here would hide every record the user has. Repairing
+      // ids is a nice-to-have; never let it cost data.
+      try {
+        var entriesRepaired = repairInvalidIds(state.entries);
+        var notesRepaired = repairInvalidIds(state.workNotes);
+        if (entriesRepaired || notesRepaired) {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+        }
+      } catch (e) {
+        console.error("ซ่อม id ของรายการไม่สำเร็จ", e);
+      }
       return state;
     } catch (e) {
       console.error("โหลดข้อมูลผิดพลาด", e);
@@ -204,9 +239,44 @@
     }
   }
 
+  // Which account this device may record for right now.
+  //
+  // Normally that is whoever is signed in. The second case matters just as
+  // much though: the auth library is loaded from a CDN, so with no
+  // connection there is no client at all and no way to ask who is signed
+  // in - and a phone in a basement or a factory still has to be able to
+  // record OT. When that happens the device falls back to the account its
+  // stored records already belong to, and everything syncs once it is back
+  // online.
+  //
+  // A browser with no session and nothing stored - a fresh one, or one
+  // somebody deliberately signed out of - belongs to no account and stays
+  // blank, which is the whole point.
+  function activeOwnerId() {
+    if (currentUserId) return currentUserId;
+    if (!supabaseClient && state.ownerId) return state.ownerId;
+    return null;
+  }
+
   function saveState() {
+    // Records belong to an account, not to a browser. With no account to
+    // file them under nothing is written to this device at all - that is
+    // what keeps a shared or borrowed browser from quietly accumulating
+    // somebody's OT. Callers the user drives directly say so out loud via
+    // requireSignIn() rather than failing silently.
+    var owner = activeOwnerId();
+    if (!owner) return;
+    state.ownerId = owner;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     pushStateToCloud();
+  }
+
+  // Signed out, the app is a blank slate: it shows nothing and saves
+  // nothing. Returns true when it is safe to go ahead.
+  function requireSignIn() {
+    if (activeOwnerId()) return true;
+    showToast("เข้าสู่ระบบด้วย Google ก่อน แล้วข้อมูลจะถูกบันทึกและซิงก์ให้อัตโนมัติ");
+    return false;
   }
 
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
@@ -216,9 +286,105 @@
   /* ============================================================
    * Helpers
    * ========================================================== */
+  // ต้องคืนค่าเป็น UUID ที่ถูกต้องเสมอ เพราะ id นี้ถูกใช้เป็น primary key
+  // ชนิด uuid ใน ot_entries/work_notes บน Supabase - ถ้าฟอร์แมตผิด (เช่น เดิม
+  // fallback คืนค่า "id-<timestamp>-<random>") การ insert ทั้งก้อนจะ fail
+  // และเพราะ pushStateToCloud() ลบแถวเดิมทิ้งก่อน insert ใหม่ ความล้มเหลวนี้
+  // จะทำให้ข้อมูลบน cloud หายจริง (ไม่ใช่แค่ sync ไม่สำเร็จ)
   function uid() {
     if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
-    return "id-" + Date.now() + "-" + Math.random().toString(16).slice(2);
+    if (window.crypto && crypto.getRandomValues) {
+      var bytes = crypto.getRandomValues(new Uint8Array(16));
+      bytes[6] = (bytes[6] & 0x0f) | 0x40;
+      bytes[8] = (bytes[8] & 0x3f) | 0x80;
+      var hex = Array.prototype.map.call(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+      return hex.slice(0, 8) + "-" + hex.slice(8, 12) + "-" + hex.slice(12, 16) + "-" + hex.slice(16, 20) + "-" + hex.slice(20);
+    }
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+      var r = (Math.random() * 16) | 0, v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  }
+
+  // ประกาศเป็น function (ไม่ใช่ var) เพราะ loadState() ถูกเรียกก่อนบรรทัดนี้ -
+  // function declaration ถูก hoist ขึ้นไปทั้งก้อน แต่ค่าใน var จะยังเป็น
+  // undefined อยู่ตอนนั้น
+  function isValidUuid(id) {
+    return typeof id === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  }
+
+  // เครื่องที่เคยสร้างรายการตอน crypto.randomUUID ใช้ไม่ได้ (เช่น in-app
+  // browser เก่าบางตัว) จะมี id ค้างอยู่ในฟอร์แมตเก่าที่ไม่ใช่ uuid - ซ่อมให้
+  // ตอนโหลด state เพื่อให้ sync ขึ้น cloud รอบถัดไปสำเร็จ แทนที่จะ fail ซ้ำๆ
+  function repairInvalidIds(list) {
+    var changed = false;
+    (list || []).forEach(function (item) {
+      if (!isValidUuid(item.id)) {
+        item.id = uid();
+        changed = true;
+      }
+    });
+    return changed;
+  }
+
+  function nowISO() { return new Date().toISOString(); }
+
+  // Postgres hands timestamps back as "...+00:00" while the app writes
+  // "...Z", so these are compared as numbers, never as strings. An older
+  // record with no stamp at all (saved before this field existed) counts as
+  // the oldest possible, so anything with a real stamp beats it.
+  function tsOf(value) {
+    var t = value ? Date.parse(value) : NaN;
+    return isNaN(t) ? 0 : t;
+  }
+
+  /**
+   * Merges record sets from any number of sources (this device, the cloud)
+   * into one, per id. Records only ever get added or updated here, never
+   * dropped: an id that exists on one side and not the other is kept. The
+   * only way for a record to disappear is an explicit tombstone, which is
+   * itself just another version of that id.
+   *
+   * For each id the version with the newest timestamp wins; a tie goes to
+   * the deletion, so a delete can't lose to the very record it removed.
+   *
+   * @param sources array of { live: [records], dead: [{id, deletedAt}] }
+   * @returns { live: [records], dead: [{id, deletedAt}] }
+   */
+  function mergeRecords(sources) {
+    var best = Object.create(null);
+    function consider(id, ts, deleted, payload) {
+      if (!id) return;
+      var cur = best[id];
+      if (!cur || ts > cur.ts || (ts === cur.ts && deleted && !cur.deleted)) {
+        best[id] = { ts: ts, deleted: deleted, payload: payload };
+      }
+    }
+    sources.forEach(function (src) {
+      (src.live || []).forEach(function (rec) {
+        consider(rec.id, tsOf(rec.updatedAt), false, rec);
+      });
+      (src.dead || []).forEach(function (t) {
+        consider(t.id, tsOf(t.deletedAt), true, t);
+      });
+    });
+    var live = [], dead = [];
+    Object.keys(best).forEach(function (id) {
+      var win = best[id];
+      if (win.deleted) dead.push({ id: id, deletedAt: win.payload.deletedAt || nowISO() });
+      else live.push(win.payload);
+    });
+    return { live: live, dead: dead };
+  }
+
+  // Records a delete as a tombstone instead of just dropping the record, so
+  // the removal reaches the user's other devices on the next sync.
+  function tombstone(list, id) {
+    var at = -1;
+    for (var i = 0; i < list.length; i++) { if (list[i].id === id) { at = i; break; } }
+    if (at === -1) list.push({ id: id, deletedAt: nowISO() });
+    else list[at].deletedAt = nowISO();
   }
 
   function pad2(n) { return String(n).padStart(2, "0"); }
@@ -520,6 +686,12 @@
     noteEndTrigger: $("noteEndTrigger"),
     noteEndTriggerText: $("noteEndTriggerText"),
     nEndDate: $("n-enddate"),
+    nRemindEnabled: $("n-remind-enabled"),
+    noteRemindFields: $("noteRemindFields"),
+    noteRemindTrigger: $("noteRemindTrigger"),
+    noteRemindTriggerText: $("noteRemindTriggerText"),
+    nRemindDate: $("n-reminddate"),
+    nRemindTime: $("n-remindtime"),
     cancelEditNoteBtn: $("cancelEditNoteBtn"),
     saveNoteBtn: $("saveNoteBtn"),
     noteList: $("noteList"),
@@ -571,12 +743,16 @@
     sDefaultTimeOut: $("s-defaulttimeout"),
     sLockTimeIn: $("s-locktimein"),
     sLockTimeOut: $("s-locktimeout"),
+    sLockTimeOutWeekend: $("s-locktimeoutweekend"),
     lockTimeInRow: $("lockTimeInRow"),
     lockTimeOutRow: $("lockTimeOutRow"),
+    lockTimeOutWeekendRow: $("lockTimeOutWeekendRow"),
     sPushEnabled: $("s-pushenabled"),
     pushRow: $("pushRow"),
     pushHint: $("pushHint"),
     sNotifyLateOut: $("s-notifylateout"),
+    sNotifyTime: $("s-notifytime"),
+    notifyTimeRow: $("notifyTimeRow"),
     currencyTrigger: $("currencyTrigger"),
     currencyTriggerFlag: $("currencyTriggerFlag"),
     currencyTriggerLabel: $("currencyTriggerLabel"),
@@ -683,6 +859,7 @@
   var ICON_WARNING = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="คำเตือน"><path d="m12 2 10 18H2L12 2Z"/><line x1="12" y1="9" x2="12" y2="13"/><circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none"/></svg>';
   var ICON_CLOUD_CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="ซิงก์แล้ว"><path d="M17.5 19a4.5 4.5 0 0 0 0-9 6 6 0 0 0-11.6 1.5A4 4 0 0 0 6 19h11.5Z"/><path d="m9 15 2 2 4-4"/></svg>';
   var ICON_NOTE = '<svg class="note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="โน้ต"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+  var ICON_BELL = '<svg class="note-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แจ้งเตือน"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>';
 
   function updateThemeToggleIcon(theme) {
     els.themeToggleBtn.innerHTML = theme === "dark" ? ICON_SUN : ICON_MOON;
@@ -812,7 +989,7 @@
    * ========================================================== */
   function updateHeaderTitle() {
     var name = (state.settings.recorderName || "").trim();
-    els.headerTitle.textContent = name ? "OT Tracker — " + name : "OT Tracker";
+    els.headerTitle.textContent = name ? "OT Fast — " + name : "OT Fast";
   }
 
   /* ============================================================
@@ -865,22 +1042,23 @@
     return (s.lockTimeOut && s.defaultTimeOut) ? s.defaultTimeOut : "";
   }
 
-  // Weekend clock-out is never predictable, so it's always left blank there
-  // regardless of the lock - but only touches the field when it still looks
-  // like an untouched default (blank, or the locked weekday value) so it
-  // never clobbers something the user typed.
+  // By default weekend clock-out is left blank (it's rarely predictable), but
+  // if the user turned on lockTimeOutWeekend the locked value is filled on
+  // Sat/Sun too. Only touches the field when it still looks like an untouched
+  // default (blank, or the locked value) so it never clobbers user input.
   function applyWeekendTimeDefault() {
-    var weekend = isWeekendDate(els.fDate.value);
-    var weekdayDefault = lockedTimeOutWeekday();
-    if (weekend && els.fTimeOut.value === weekdayDefault) {
+    var lockedOut = lockedTimeOutWeekday();
+    var blankWeekend = isWeekendDate(els.fDate.value) && !state.settings.lockTimeOutWeekend;
+    if (blankWeekend && els.fTimeOut.value === lockedOut) {
       els.fTimeOut.value = "";
-    } else if (!weekend && els.fTimeOut.value === "") {
-      els.fTimeOut.value = weekdayDefault;
+    } else if (!blankWeekend && els.fTimeOut.value === "") {
+      els.fTimeOut.value = lockedOut;
     }
   }
 
   function resetForm() {
     editingId = null;
+    entryFormTouched = false;
     els.entryForm.reset();
     els.fDate.value = toISODate(new Date());
     els.fTimeIn.value = lockedTimeIn();
@@ -972,6 +1150,18 @@
     updateDateTriggerTextGeneric(els.fDate, els.dateTriggerText, els.dateTrigger);
   }
 
+  // Set as soon as the user types into a form, cleared when that form is
+  // reset. Syncing must not clear a form somebody is in the middle of
+  // filling in - that silently threw away what they had typed, and syncing
+  // now happens whenever the app regains focus, not just at login.
+  var entryFormTouched = false;
+  var noteFormTouched = false;
+
+  function resetFormsIfUntouched() {
+    if (!entryFormTouched && !editingId) resetForm();
+    if (!noteFormTouched && !editingNoteId) resetNoteForm();
+  }
+
   function updatePreview() {
     updateWeekendNotice();
     updateHolidayNotice();
@@ -998,6 +1188,7 @@
 
   ["input", "change"].forEach(function (evt) {
     els.entryForm.addEventListener(evt, function (e) {
+      entryFormTouched = true;
       if (e.target.id === "f-otrate") {
         els.fOtCustomWrap.classList.toggle("hidden", els.fOtRate.value !== "custom");
       }
@@ -1010,6 +1201,7 @@
 
   els.entryForm.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (!requireSignIn()) return;
     var draft = draftEntryFromForm();
     if (!draft.date || !draft.timeIn || !draft.timeOut) {
       showToast("กรุณากรอกข้อมูลให้ครบ");
@@ -1021,10 +1213,11 @@
     }
     if (editingId) {
       var idx = state.entries.findIndex(function (x) { return x.id === editingId; });
-      if (idx !== -1) state.entries[idx] = Object.assign({ id: editingId }, draft);
+      if (idx !== -1) state.entries[idx] = Object.assign({ id: editingId, updatedAt: nowISO() }, draft);
       showToast("แก้ไขรายการแล้ว ✓");
     } else {
       draft.id = uid();
+      draft.updatedAt = nowISO();
       state.entries.push(draft);
       showToast("บันทึกแล้ว ✓");
     }
@@ -1071,7 +1264,12 @@
   function calendarTargetFieldValue() {
     if (calendarTarget === "note-start") return els.nStartDate.value;
     if (calendarTarget === "note-end") return els.nEndDate.value;
+    if (calendarTarget === "note-remind") return els.nRemindDate.value;
     return els.fDate.value;
+  }
+
+  function isNoteCalendarTarget() {
+    return calendarTarget === "note-start" || calendarTarget === "note-end" || calendarTarget === "note-remind";
   }
 
   function renderCalendar() {
@@ -1141,6 +1339,9 @@
         els.nEndDate.value = iso;
         updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
       }
+    } else if (target === "note-remind") {
+      els.nRemindDate.value = iso;
+      updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     } else {
       els.nEndDate.value = iso;
       updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
@@ -1161,7 +1362,7 @@
   }
 
   function selectCalendarDate(iso) {
-    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+    if (isNoteCalendarTarget()) {
       setNoteDateValue(calendarTarget, iso);
     } else {
       setFDateValue(iso);
@@ -1172,6 +1373,7 @@
   els.dateTrigger.addEventListener("click", function () { openCalendar("entry"); });
   els.noteStartTrigger.addEventListener("click", function () { openCalendar("note-start"); });
   els.noteEndTrigger.addEventListener("click", function () { openCalendar("note-end"); });
+  els.noteRemindTrigger.addEventListener("click", function () { openCalendar("note-remind"); });
   els.calClose.addEventListener("click", closeCalendar);
 
   els.calPrev.addEventListener("click", function () {
@@ -1188,7 +1390,7 @@
     selectCalendarDate(toISODate(t));
   });
   els.calClear.addEventListener("click", function () {
-    if (calendarTarget === "note-start" || calendarTarget === "note-end") {
+    if (isNoteCalendarTarget()) {
       setNoteDateValue(calendarTarget, "");
     } else {
       setFDateValue("");
@@ -1274,6 +1476,7 @@
       showConfirm("ลบรายการวันที่ " + dfShort.format(fromISODate(entry.date)) + " ใช่หรือไม่?").then(function (ok) {
         if (!ok) return;
         state.entries = state.entries.filter(function (x) { return x.id !== id; });
+        tombstone(state.deletedEntries, id);
         saveState();
         renderEntryList();
         showToast("ลบรายการแล้ว");
@@ -1291,13 +1494,26 @@
    * ========================================================== */
   var editingNoteId = null;
 
+  // Shows/hides the reminder date+time row to match the toggle. Uses the
+  // .hidden class (display:none !important) rather than the hidden attribute,
+  // which .field-row's display:grid would otherwise override.
+  function setNoteReminderVisible(show) {
+    els.noteRemindFields.classList.toggle("hidden", !show);
+  }
+
   function resetNoteForm() {
     editingNoteId = null;
+    noteFormTouched = false;
     els.noteForm.reset();
     els.nStartDate.value = "";
     els.nEndDate.value = "";
+    els.nRemindDate.value = "";
+    els.nRemindTime.value = "";
+    els.nRemindEnabled.checked = false;
+    setNoteReminderVisible(false);
     updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
     updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     els.noteFormTitle.textContent = "บันทึกเหตุการณ์ล่วงหน้า";
     els.saveNoteBtn.textContent = "บันทึก";
     els.cancelEditNoteBtn.classList.add("hidden");
@@ -1309,16 +1525,41 @@
     els.nDescription.value = note.description || "";
     els.nStartDate.value = note.startDate;
     els.nEndDate.value = note.endDate;
+    els.nRemindEnabled.checked = !!note.reminderEnabled;
+    els.nRemindDate.value = note.reminderDate || "";
+    els.nRemindTime.value = note.reminderTime || "";
+    setNoteReminderVisible(!!note.reminderEnabled);
     updateDateTriggerTextGeneric(els.nStartDate, els.noteStartTriggerText, els.noteStartTrigger);
     updateDateTriggerTextGeneric(els.nEndDate, els.noteEndTriggerText, els.noteEndTrigger);
+    updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
     els.noteFormTitle.textContent = "แก้ไขบันทึกเหตุการณ์";
     els.saveNoteBtn.textContent = "บันทึกการแก้ไข";
     els.cancelEditNoteBtn.classList.remove("hidden");
     els.noteForm.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  // Turning the reminder on pre-fills sensible defaults (the event's start
+  // date, or today, at 08:00) so the user usually only has to tweak, not
+  // enter from scratch.
+  els.nRemindEnabled.addEventListener("change", function () {
+    var show = els.nRemindEnabled.checked;
+    setNoteReminderVisible(show);
+    if (show) {
+      if (!els.nRemindDate.value) {
+        els.nRemindDate.value = els.nStartDate.value || toISODate(new Date());
+        updateDateTriggerTextGeneric(els.nRemindDate, els.noteRemindTriggerText, els.noteRemindTrigger);
+      }
+      if (!els.nRemindTime.value) els.nRemindTime.value = "08:00";
+    }
+  });
+
+  ["input", "change"].forEach(function (evt) {
+    els.noteForm.addEventListener(evt, function () { noteFormTouched = true; });
+  });
+
   els.noteForm.addEventListener("submit", function (e) {
     e.preventDefault();
+    if (!requireSignIn()) return;
     var title = els.nTitle.value.trim();
     var startDate = els.nStartDate.value;
     // Single-day note when no end date was picked: start === end, per spec.
@@ -1331,18 +1572,41 @@
       showToast("วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่ม");
       return;
     }
+
+    var remindEnabled = els.nRemindEnabled.checked;
+    var remindDate = remindEnabled ? els.nRemindDate.value : "";
+    var remindTime = remindEnabled ? els.nRemindTime.value : "";
+    if (remindEnabled && (!remindDate || !remindTime)) {
+      showToast("กรุณาเลือกวันและเวลาแจ้งเตือน");
+      return;
+    }
+
     var draft = {
       title: title,
       description: els.nDescription.value.trim(),
       startDate: startDate,
-      endDate: endDate
+      endDate: endDate,
+      reminderEnabled: remindEnabled,
+      reminderDate: remindDate,
+      reminderTime: remindTime
     };
     if (editingNoteId) {
       var idx = state.workNotes.findIndex(function (x) { return x.id === editingNoteId; });
-      if (idx !== -1) state.workNotes[idx] = Object.assign({ id: editingNoteId }, draft);
+      if (idx !== -1) {
+        var prev = state.workNotes[idx];
+        // Only re-arm the (server-side) "sent" flag when the schedule actually
+        // changed - editing just the title shouldn't make a past reminder fire
+        // again, but rescheduling to a new day/time should.
+        var rescheduled = !prev.reminderEnabled !== !remindEnabled ||
+          prev.reminderDate !== remindDate || prev.reminderTime !== remindTime;
+        draft.reminderSent = rescheduled ? false : !!prev.reminderSent;
+        state.workNotes[idx] = Object.assign({ id: editingNoteId, updatedAt: nowISO() }, draft);
+      }
       showToast("แก้ไขบันทึกแล้ว ✓");
     } else {
       draft.id = uid();
+      draft.reminderSent = false;
+      draft.updatedAt = nowISO();
       state.workNotes.push(draft);
       showToast("บันทึกแล้ว ✓");
     }
@@ -1373,12 +1637,17 @@
 
     els.noteList.innerHTML = sorted.map(function (note) {
       var descHtml = note.description ? '<div class="entry-item__note">' + ICON_NOTE + escapeHtml(note.description) + "</div>" : "";
+      var remindHtml = (note.reminderEnabled && note.reminderDate && note.reminderTime)
+        ? '<div class="entry-item__note">' + ICON_BELL + "แจ้งเตือน " +
+            dfShort.format(fromISODate(note.reminderDate)) + " " + escapeHtml(note.reminderTime) + " น." + "</div>"
+        : "";
       return (
         '<div class="entry-item" data-id="' + note.id + '">' +
           '<div class="entry-item__main">' +
             '<div class="entry-item__date">' + escapeHtml(note.title) + "</div>" +
             '<div class="entry-item__time">' + noteDateRangeLabel(note) + "</div>" +
             descHtml +
+            remindHtml +
           "</div>" +
           '<div class="entry-item__actions">' +
             '<button class="icon-btn icon-btn--tonal" data-action="edit" aria-label="แก้ไข"><span class="icon-tonal icon-tonal--sm icon-tonal--secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="แก้ไข"><path d="M4 20l1-4L16 5l3 3L8 19l-4 1z"/><line x1="13.5" y1="6.5" x2="17.5" y2="10.5"/></svg></span></button>' +
@@ -1403,6 +1672,7 @@
       showConfirm('ลบบันทึก "' + note.title + '" ใช่หรือไม่?').then(function (ok) {
         if (!ok) return;
         state.workNotes = state.workNotes.filter(function (x) { return x.id !== id; });
+        tombstone(state.deletedNotes, id);
         saveState();
         renderNoteList();
         showToast("ลบรายการแล้ว");
@@ -1903,6 +2173,7 @@
     els.sDefaultTimeOut.value = s.defaultTimeOut || "";
     els.sLockTimeIn.checked = !!s.lockTimeIn;
     els.sLockTimeOut.checked = !!s.lockTimeOut;
+    els.sLockTimeOutWeekend.checked = !!s.lockTimeOutWeekend;
     updateLockToggleAvailability();
     updateCurrencyTrigger();
     els.hourlyRateLabel.textContent = "ค่าแรงต่อชั่วโมง (" + cur.symbol + " " + cur.label + ") — ใช้คำนวณ OT เท่านั้น";
@@ -1917,6 +2188,8 @@
     els.sLunchEnd.value = s.lunchEnd;
     els.sNormalEnd.value = s.normalEnd;
     els.sNotifyLateOut.checked = !!s.notifyEnabled;
+    els.sNotifyTime.value = s.notifyTime || "";
+    updateNotifyTimeVisible();
     els.sHasMandatoryOt.checked = !!s.hasMandatoryOt;
     els.sMandatoryOtEnd.value = s.mandatoryOtEnd;
     els.sHasEveningBreak.checked = !!s.hasEveningBreak;
@@ -2004,6 +2277,10 @@
     els.sLockTimeOut.disabled = !hasOut;
     els.lockTimeInRow.classList.toggle("is-disabled", !hasIn);
     els.lockTimeOutRow.classList.toggle("is-disabled", !hasOut);
+    // the weekend sub-toggle only makes sense once clock-out is actually locked
+    var canWeekend = hasOut && state.settings.lockTimeOut;
+    els.sLockTimeOutWeekend.disabled = !canWeekend;
+    els.lockTimeOutWeekendRow.classList.toggle("is-disabled", !canWeekend);
   }
 
   els.sDefaultTimeIn.addEventListener("input", function () {
@@ -2033,6 +2310,12 @@
 
   els.sLockTimeOut.addEventListener("change", function () {
     state.settings.lockTimeOut = els.sLockTimeOut.checked;
+    updateLockToggleAvailability();
+    persistSettings();
+  });
+
+  els.sLockTimeOutWeekend.addEventListener("change", function () {
+    state.settings.lockTimeOutWeekend = els.sLockTimeOutWeekend.checked;
     persistSettings();
   });
 
@@ -2068,19 +2351,27 @@
     try { localStorage.setItem(NOTE_NOTIFY_KEY, JSON.stringify(s)); } catch (e) {}
   }
 
+  // Foreground safety-net for event reminders: when the tab happens to be
+  // open at/after a note's chosen reminder time (today), show a local
+  // notification, once per note per day. The reliable delivery path is the
+  // server-side push (send-event-reminders); this just covers the case where
+  // push isn't set up on this device but the app is open.
   function checkUpcomingNoteNotifications() {
     if (notificationSupport() !== "granted") return;
 
-    var todayISO = toISODate(new Date());
-    var tomorrowISO = toISODate(addDays(new Date(), 1));
+    var now = new Date();
+    var todayISO = toISODate(now);
+    var nowMinutes = now.getHours() * 60 + now.getMinutes();
     var notified = getNotifiedNoteState();
     if (notified.date !== todayISO) notified = { date: todayISO, ids: [] };
 
     state.workNotes.forEach(function (note) {
-      if (note.startDate !== tomorrowISO) return;
+      if (!note.reminderEnabled || !note.reminderDate || !note.reminderTime) return;
+      if (note.reminderDate !== todayISO) return;
+      if (nowMinutes < timeToMinutes(note.reminderTime)) return; // ยังไม่ถึงเวลา
       if (notified.ids.indexOf(note.id) !== -1) return;
       try {
-        new Notification("OT Tracker", { body: "🔔 พรุ่งนี้: " + note.title });
+        new Notification("OT Fast", { body: "🔔 " + note.title });
       } catch (e) {
         console.error("แสดงการแจ้งเตือนไม่สำเร็จ", e);
       }
@@ -2301,6 +2592,15 @@
   // trigger many pushStateToCloud() calls, one per edit) doesn't spam
   // repeated toasts - reset back to false as soon as a push succeeds.
   var syncErrorNotified = false;
+  // Bumped by every pushStateToCloud() call so an older, still-in-flight
+  // push can tell that fresher data is already on its way up and skip its
+  // own cleanup delete (see pushStateToCloud).
+  var pushSeq = 0;
+  // Set by the logout button so a lapsed session can be told apart from
+  // somebody deliberately handing the browser back (see handleAuthChange).
+  var explicitLogout = false;
+  // The open Realtime subscription, if any (see subscribeToLiveChanges).
+  var liveChannel = null;
 
   function getLastSyncISO() {
     try { return localStorage.getItem(SYNC_LAST_KEY); } catch (e) { return null; }
@@ -2347,6 +2647,8 @@
     return {
       id: entry.id,
       user_id: userId,
+      updated_at: entry.updatedAt || nowISO(),
+      deleted_at: null,
       date: entry.date,
       time_in: entry.timeIn,
       time_out: entry.timeOut,
@@ -2358,6 +2660,7 @@
   function rowToEntry(row) {
     return {
       id: row.id,
+      updatedAt: row.updated_at || null,
       date: row.date,
       timeIn: row.time_in,
       timeOut: row.time_out,
@@ -2370,61 +2673,133 @@
     return {
       id: note.id,
       user_id: userId,
+      updated_at: note.updatedAt || nowISO(),
+      deleted_at: null,
       title: note.title,
       description: note.description || "",
       start_date: note.startDate,
-      end_date: note.endDate
+      end_date: note.endDate,
+      reminder_enabled: !!note.reminderEnabled,
+      reminder_date: (note.reminderEnabled && note.reminderDate) ? note.reminderDate : null,
+      reminder_time: (note.reminderEnabled && note.reminderTime) ? note.reminderTime : null,
+      // Round-trip the server-written "sent" flag: work_notes rows are
+      // upserted wholesale from local state on every sync (see
+      // pushStateToCloud), so if we didn't carry this value back it would
+      // reset to false every sync and re-fire past reminders.
+      reminder_sent: !!note.reminderSent
     };
   }
 
   function rowToNote(row) {
     return {
       id: row.id,
+      updatedAt: row.updated_at || null,
       title: row.title,
       description: row.description || "",
       startDate: row.start_date,
-      endDate: row.end_date
+      endDate: row.end_date,
+      reminderEnabled: !!row.reminder_enabled,
+      reminderDate: row.reminder_date || "",
+      reminderTime: row.reminder_time || "",
+      reminderSent: !!row.reminder_sent
     };
   }
 
-  // Mirrors the full local state up to Supabase: upserts the single
-  // settings row, then replaces all of this user's ot_entries rows
-  // wholesale (delete + reinsert) rather than diffing them - simple and
-  // correct for the data sizes this app deals with. Fire-and-forget: never
-  // awaited by callers, failures (e.g. offline while signed in) only log,
-  // so a sync hiccup never blocks or breaks local editing.
+  // เดา IANA timezone จริงของเครื่อง (เช่น "Asia/Seoul") จาก Intl ของ browser
+  // - ot_settings.timezone เดิม default เป็น "Asia/Bangkok" เสมอเพราะไม่เคยมี
+  // โค้ดฝั่ง client เขียนค่านี้เลย ทำให้ send-push-reminders/send-event-reminders
+  // (ฝั่ง server) คำนวณเวลาแจ้งเตือนผิดเขตเวลาสำหรับผู้ใช้ที่อยู่นอกไทย
+  function detectTimeZone() {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Mirrors local state up to Supabase. Two properties matter more than
+  // anything else here, because getting them wrong is what lost this app's
+  // data once already:
+  //
+  //  1. It never deletes a row. Live records are upserted; deleted ones are
+  //     marked with deleted_at on the rows that already exist (tombstones,
+  //     sent as an UPDATE - a tombstone can't be upserted because it no
+  //     longer carries the NOT NULL columns the insert half would need).
+  //     There is no statement in this path capable of destroying a record.
+  //  2. It only ever adds this device's knowledge to the cloud. Deciding
+  //     what the truth is happens in syncWithCloud() via mergeRecords(),
+  //     never by one side flattening the other.
+  //
+  // Errors are swallowed (they only log and flag the sync status) so
+  // saveState() can fire this off without a failure blocking local editing.
+  // Resolves true only once the data has really landed and false if
+  // anything failed - any caller that tells the user "uploaded ✓" must wait
+  // for that rather than assuming success the moment the request goes out.
   function pushStateToCloud() {
-    if (!supabaseClient || !currentUserId) return;
+    if (!supabaseClient || !currentUserId) return Promise.resolve(false);
     var userId = currentUserId;
+    var mySeq = ++pushSeq;
     syncStatus = "syncing";
     renderSyncStatus();
-    supabaseClient
+    var settingsRow = { user_id: userId, data: state.settings, updated_at: nowISO() };
+    var tz = detectTimeZone();
+    if (tz) settingsRow.timezone = tz;
+    // Snapshot everything this push will write, so the rows sent can't
+    // change halfway through under an edit made while it runs.
+    var entries = state.entries.slice();
+    var notes = state.workNotes.slice();
+    var deadEntries = state.deletedEntries.slice();
+    var deadNotes = state.deletedNotes.slice();
+    // Every push writes the whole state, so an older one that is still in
+    // flight when a newer starts has nothing left to contribute - and its
+    // data is staler. Bailing out beats overwriting fresh rows with old
+    // ones.
+    function stale() { return mySeq !== pushSeq; }
+
+    function markDeleted(table, tombs) {
+      if (!tombs.length) return Promise.resolve({ error: null });
+      var newest = {};
+      tombs.forEach(function (t) { newest[t.id] = t.deletedAt || nowISO(); });
+      var ids = Object.keys(newest);
+      return supabaseClient.from(table)
+        .update({ deleted_at: nowISO(), updated_at: nowISO() })
+        .eq("user_id", userId)
+        .in("id", ids);
+    }
+
+    return supabaseClient
       .from("ot_settings")
-      .upsert({ user_id: userId, data: state.settings, updated_at: new Date().toISOString() })
+      .upsert(settingsRow)
       .then(function (res) {
         if (res.error) throw res.error;
-        return supabaseClient.from("ot_entries").delete().eq("user_id", userId);
-      })
-      .then(function (res) {
-        if (res.error) throw res.error;
-        if (!state.entries.length) return null;
-        return supabaseClient.from("ot_entries").insert(state.entries.map(function (e) { return entryToRow(e, userId); }));
+        if (stale() || !entries.length) return null;
+        return supabaseClient.from("ot_entries").upsert(entries.map(function (e) { return entryToRow(e, userId); }));
       })
       .then(function (res) {
         if (res && res.error) throw res.error;
-        return supabaseClient.from("work_notes").delete().eq("user_id", userId);
-      })
-      .then(function (res) {
-        if (res.error) throw res.error;
-        if (!state.workNotes.length) return null;
-        return supabaseClient.from("work_notes").insert(state.workNotes.map(function (n) { return noteToRow(n, userId); }));
+        if (stale()) return null;
+        return markDeleted("ot_entries", deadEntries);
       })
       .then(function (res) {
         if (res && res.error) throw res.error;
-        setLastSyncISO(new Date().toISOString());
+        if (stale() || !notes.length) return null;
+        return supabaseClient.from("work_notes").upsert(notes.map(function (n) { return noteToRow(n, userId); }));
+      })
+      .then(function (res) {
+        if (res && res.error) throw res.error;
+        if (stale()) return null;
+        return markDeleted("work_notes", deadNotes);
+      })
+      .then(function (res) {
+        if (res && res.error) throw res.error;
+        // A newer push owns the status line; don't paint "synced" over a
+        // sync that is still running (or has already failed).
+        if (stale()) return true;
+        setLastSyncISO(nowISO());
         syncStatus = "success";
         syncErrorNotified = false;
         renderSyncStatus();
+        return true;
       })
       .catch(function (err) {
         console.error("ซิงก์ข้อมูลขึ้น cloud ไม่สำเร็จ", err);
@@ -2434,14 +2809,19 @@
           syncErrorNotified = true;
           showToast("⚠️ ข้อมูลบันทึกในเครื่องแล้ว แต่ยังไม่ได้ซิงก์ขึ้น cloud (ตรวจสอบอินเทอร์เน็ต)");
         }
+        return false;
       });
   }
 
-  // Replaces local state with what's already in the cloud - used when a
-  // second device/browser logs in and the cloud already has data. Writes
-  // straight to localStorage (not saveState()) so this doesn't immediately
-  // re-trigger a redundant push of the very data just pulled down.
-  function pullStateFromCloud(userId) {
+  // Brings this device and the cloud to the same state by *merging* them,
+  // then pushing the merged result back up. This replaced a pull that
+  // overwrote local records with whatever the cloud held: that was fine
+  // when the cloud was healthy and catastrophic when it wasn't, and it also
+  // meant a device holding records the cloud had never seen lost them just
+  // by signing in. Merging removes the whole category of problem - neither
+  // side can flatten the other, and a record only ever disappears because
+  // of an explicit tombstone.
+  function syncWithCloud(userId) {
     return Promise.all([
       supabaseClient.from("ot_settings").select("data").eq("user_id", userId).maybeSingle(),
       supabaseClient.from("ot_entries").select("*").eq("user_id", userId),
@@ -2454,44 +2834,131 @@
       if (settingsRes.data) {
         state.settings = Object.assign(clone(DEFAULT_STATE.settings), settingsRes.data.data || {});
       }
-      state.entries = (entriesRes.data || []).map(rowToEntry);
-      state.workNotes = (notesRes.data || []).map(rowToNote);
+
+      // Soft-deleted rows come back from the cloud too - they are how a
+      // delete made on another device reaches this one.
+      function split(rows, toRecord) {
+        var live = [], dead = [];
+        (rows || []).forEach(function (row) {
+          if (row.deleted_at) dead.push({ id: row.id, deletedAt: row.deleted_at });
+          else live.push(toRecord(row));
+        });
+        return { live: live, dead: dead };
+      }
+      var cloudEntries = split(entriesRes.data, rowToEntry);
+      var cloudNotes = split(notesRes.data, rowToNote);
+
+      // Merging is only ever safe between one account's own copies. On a
+      // shared browser the previous person's records are still sitting in
+      // localStorage, and folding those into whoever signs in next would
+      // both show them their colleague's OT and upload it into that
+      // account. Anything belonging to a different account is dropped here
+      // instead - it is already safe in its own account in the cloud.
+      // A device that has never signed in has no owner yet, so data
+      // recorded before the first login is adopted rather than discarded.
+      if (state.ownerId && state.ownerId !== userId) {
+        state.entries = [];
+        state.workNotes = [];
+        state.deletedEntries = [];
+        state.deletedNotes = [];
+      }
+      state.ownerId = userId;
+
+      var mergedEntries = mergeRecords([
+        { live: state.entries, dead: state.deletedEntries },
+        cloudEntries
+      ]);
+      var mergedNotes = mergeRecords([
+        { live: state.workNotes, dead: state.deletedNotes },
+        cloudNotes
+      ]);
+      state.entries = mergedEntries.live;
+      state.deletedEntries = mergedEntries.dead;
+      state.workNotes = mergedNotes.live;
+      state.deletedNotes = mergedNotes.dead;
+
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       loadSettingsToForm();
       updateHeaderTitle();
-      resetForm();
+      resetFormsIfUntouched();
       renderEntryList();
       renderSummary();
-      resetNoteForm();
       renderNoteList();
       checkUpcomingNoteNotifications();
-      setLastSyncISO(new Date().toISOString());
-      syncStatus = "success";
-      syncErrorNotified = false;
-      renderSyncStatus();
+      // Push the merged result so the cloud ends up holding everything this
+      // device just contributed, not only what it already had.
+      return pushStateToCloud();
     });
   }
 
-  // First time this user id is seen: if the cloud has nothing for them
-  // yet, seed it from whatever's already in localStorage on this device;
-  // otherwise the cloud is treated as authoritative and overwrites local.
+  // Applies one row the database pushed to us. Merged through exactly the
+  // same rules as a full sync, so a live update can no more drop a record
+  // than a sync can, and applying the same row twice changes nothing.
+  //
+  // Deliberately does NOT push anything back: our own writes echo back to us
+  // as events too, and answering an event with a write would have two
+  // devices talking in circles forever.
+  function applyLiveRow(kind, row) {
+    if (!row || !row.id || row.user_id !== currentUserId) return;
+    var incoming = row.deleted_at
+      ? { live: [], dead: [{ id: row.id, deletedAt: row.deleted_at }] }
+      : { live: [kind === "entries" ? rowToEntry(row) : rowToNote(row)], dead: [] };
+    var merged = kind === "entries"
+      ? mergeRecords([{ live: state.entries, dead: state.deletedEntries }, incoming])
+      : mergeRecords([{ live: state.workNotes, dead: state.deletedNotes }, incoming]);
+    if (kind === "entries") {
+      state.entries = merged.live;
+      state.deletedEntries = merged.dead;
+    } else {
+      state.workNotes = merged.live;
+      state.deletedNotes = merged.dead;
+    }
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (e) {}
+    // Only the views - never the forms. A live update arriving while
+    // somebody is typing must not disturb what they are entering.
+    renderEntryList();
+    renderSummary();
+    renderNoteList();
+  }
+
+  // Subscribes to this account's own rows so a change made on another device
+  // shows up here as it happens, with no need to reopen or refocus the app.
+  // The filters are scoped to this user id, and the database's row level
+  // security independently limits the stream to rows this account may read.
+  function subscribeToLiveChanges(userId) {
+    if (!supabaseClient || !supabaseClient.channel) return;
+    unsubscribeFromLiveChanges();
+    try {
+      liveChannel = supabaseClient
+        .channel("ot-live-" + userId)
+        .on("postgres_changes",
+          { event: "*", schema: "public", table: "ot_entries", filter: "user_id=eq." + userId },
+          function (payload) { applyLiveRow("entries", payload.new); })
+        .on("postgres_changes",
+          { event: "*", schema: "public", table: "work_notes", filter: "user_id=eq." + userId },
+          function (payload) { applyLiveRow("notes", payload.new); })
+        .subscribe();
+    } catch (err) {
+      // Live updates are a convenience on top of syncing, never the thing
+      // that keeps data safe - if the socket can't be opened the app still
+      // syncs on sign-in and whenever it regains focus.
+      console.warn("เปิดการอัปเดตแบบเรียลไทม์ไม่สำเร็จ", err);
+      liveChannel = null;
+    }
+  }
+
+  function unsubscribeFromLiveChanges() {
+    if (!liveChannel) return;
+    try { supabaseClient.removeChannel(liveChannel); } catch (e) {}
+    liveChannel = null;
+  }
+
+  // Runs when an account is seen for the first time in this session. There
+  // is no "is the cloud empty?" branch any more: merging is correct whether
+  // the cloud is empty, this device is empty, or both hold different data.
   function initialSyncOnLogin(userId) {
-    Promise.all([
-      supabaseClient.from("ot_settings").select("user_id").eq("user_id", userId).maybeSingle(),
-      supabaseClient.from("ot_entries").select("id", { count: "exact", head: true }).eq("user_id", userId)
-    ]).then(function (results) {
-      var settingsRes = results[0], entriesCountRes = results[1];
-      if (settingsRes.error) throw settingsRes.error;
-      if (entriesCountRes.error) throw entriesCountRes.error;
-      var cloudEmpty = !settingsRes.data && !entriesCountRes.count;
-      if (cloudEmpty) {
-        pushStateToCloud();
-        showToast("อัปโหลดข้อมูลขึ้น cloud แล้ว ✓");
-        return null;
-      }
-      return pullStateFromCloud(userId).then(function () {
-        showToast("ดึงข้อมูลจาก cloud แล้ว ✓");
-      });
+    return syncWithCloud(userId).then(function (ok) {
+      if (ok) showToast("ซิงก์ข้อมูลกับ cloud แล้ว ✓");
     }).catch(function (err) {
       console.error("ซิงก์ข้อมูลเริ่มต้นไม่สำเร็จ", err);
       syncStatus = "error";
@@ -2502,24 +2969,72 @@
       }
     });
   }
+  // Reloads the records this device has stored, but only if they belong to
+  // the account signing in. Needed because signing out empties the in-memory
+  // copy while leaving the stored one alone: anything recorded offline and
+  // not yet synced has to survive a session that simply expired.
+  function restoreLocalRecordsFor(userId) {
+    var stored = loadState();
+    if (stored.ownerId && stored.ownerId !== userId) return;
+    state.entries = stored.entries;
+    state.workNotes = stored.workNotes;
+    state.deletedEntries = stored.deletedEntries;
+    state.deletedNotes = stored.deletedNotes;
+  }
+
+  // Empties the view so a signed-out browser shows nothing of the last
+  // person who used it. Deliberately signing out also erases the stored
+  // copy - the records are safe in the account they were synced to. A
+  // session that merely lapsed (expired token, offline for too long) keeps
+  // the stored copy, so OT recorded offline isn't thrown away by a sign-in
+  // prompt.
+  function clearRecordsFromView(alsoEraseStored) {
+    state.entries = [];
+    state.workNotes = [];
+    state.deletedEntries = [];
+    state.deletedNotes = [];
+    state.settings = clone(DEFAULT_STATE.settings);
+    if (alsoEraseStored) {
+      state.ownerId = null;
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
+    }
+    loadSettingsToForm();
+    updateHeaderTitle();
+    resetForm();
+    resetNoteForm();
+    renderEntryList();
+    renderSummary();
+    renderNoteList();
+  }
 
   function handleAuthChange(session) {
     renderAuthState(session);
     var userId = session ? session.user.id : null;
     if (userId && userId !== currentUserId) {
       currentUserId = userId;
+      restoreLocalRecordsFor(userId);
+      subscribeToLiveChanges(userId);
       syncStatus = "syncing";
       syncErrorNotified = false;
       renderSyncStatus();
-      initialSyncOnLogin(userId);
+      // Wait for the cloud settings pull to land before syncing the
+      // notification UI, so the leave-work toggle reflects the authoritative
+      // cloud notifyEnabled value (not a stale local one) and the push
+      // self-heal runs against the right account.
+      initialSyncOnLogin(userId).then(syncNotificationUI);
     } else if (!userId) {
+      var deliberate = explicitLogout;
+      explicitLogout = false;
       currentUserId = null;
+      unsubscribeFromLiveChanges();
+      clearRecordsFromView(deliberate);
       syncStatus = "idle";
       renderSyncStatus();
+      syncNotificationUI();
     } else {
       renderSyncStatus();
+      syncNotificationUI();
     }
-    refreshPushToggleState();
   }
 
   if (supabaseClient) {
@@ -2531,6 +3046,7 @@
     });
 
     els.logoutBtn.addEventListener("click", function () {
+      explicitLogout = true;
       supabaseClient.auth.signOut();
     });
 
@@ -2543,6 +3059,23 @@
     // event (e.g. switching wifi networks) shouldn't trigger extra pushes.
     window.addEventListener("online", function () {
       if (currentUserId && syncStatus === "error") pushStateToCloud();
+    });
+
+    // Coming back to the app re-syncs, so a record added on the phone shows
+    // up on the laptop without signing out and back in. Sync on login alone
+    // is not enough for someone actually using two devices. Throttled so
+    // flicking between tabs doesn't hammer the network; safe to run often
+    // either way, since syncing merges rather than overwrites.
+    var RESYNC_AFTER_MS = 60 * 1000;
+    var lastResyncAt = 0;
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden || !currentUserId || syncStatus === "syncing") return;
+      var now = Date.now();
+      if (now - lastResyncAt < RESYNC_AFTER_MS) return;
+      lastResyncAt = now;
+      syncWithCloud(currentUserId).catch(function (err) {
+        console.error("ซิงก์ข้อมูลตอนกลับเข้าแอปไม่สำเร็จ", err);
+      });
     });
 
     supabaseClient.auth.getSession().then(function (result) {
@@ -2587,51 +3120,121 @@
     return outputArray;
   }
 
-  // Keeps the toggle's checked/enabled state and hint text in sync with
-  // reality (support, sign-in state, and the actual subscription).
-  function updatePushToggleAvailability(subscribed) {
-    var supported = pushSupported();
-    var disabled = !supported || !currentUserId;
-    els.sPushEnabled.disabled = disabled;
-    els.pushRow.classList.toggle("is-disabled", disabled);
-    els.sPushEnabled.checked = !disabled && !!subscribed;
-    if (!supported) {
-      els.pushHint.textContent = "อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)";
-    } else if (!currentUserId) {
-      els.pushHint.textContent = "ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    } else if (subscribed) {
-      els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    } else {
-      els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
-    }
-
-    // The late-clock-out reminder is delivered entirely server-side over
-    // Push, so it can't mean anything without an active subscription - if
-    // Push just got disabled (or never was), force it off and lock the
-    // toggle so the UI never shows it as enabled with nothing to deliver it.
-    if (!subscribed && state.settings.notifyEnabled) {
-      state.settings.notifyEnabled = false;
-      persistSettings();
-    }
-    els.sNotifyLateOut.disabled = !subscribed;
-    els.sNotifyLateOut.checked = !!subscribed && !!state.settings.notifyEnabled;
+  function notificationPermission() {
+    return (typeof Notification !== "undefined") ? Notification.permission : "denied";
   }
 
-  // Re-derives the toggle state from the Service Worker's actual
-  // subscription (source of truth) rather than trusting any locally
-  // cached flag - a subscription can be revoked outside the app (e.g.
-  // browser settings) so this is called after every relevant change.
-  function refreshPushToggleState() {
-    if (!pushSupported()) {
-      updatePushToggleAvailability(false);
+  // Best-effort self-heal of THIS device's push subscription. Runs on every
+  // app load / login so a subscription that the browser silently dropped (a
+  // Service Worker update, iOS PWA eviction, or a benign server-side stale
+  // cleanup) gets recreated automatically - this is what keeps push working
+  // "across days" without the user re-enabling anything. Crucially it NEVER
+  // prompts (only acts when permission is already granted) and NEVER touches
+  // notifyEnabled. Resolves to whether this device now has a subscription.
+  function ensurePushSubscription() {
+    if (!pushSupported()) return Promise.resolve(false);
+    return navigator.serviceWorker.ready.then(function (reg) {
+      return reg.pushManager.getSubscription().then(function (sub) {
+        if (sub) {
+          // Re-persist to the server so a subscription that was wrongly pruned
+          // there (e.g. one failed send) is restored on the next app open.
+          savePushSubscription(sub).catch(function () {});
+          return true;
+        }
+        if (!currentUserId || notificationPermission() !== "granted") return false;
+        return reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+        }).then(function (fresh) {
+          savePushSubscription(fresh).catch(function () {});
+          return true;
+        }).catch(function (err) {
+          console.error("[push] auto-subscribe failed", err);
+          return false;
+        });
+      });
+    }).catch(function () { return false; });
+  }
+
+  // Single source of truth for both notification toggles. It reflects state,
+  // it never decides intent: the leave-work toggle mirrors the cloud-synced
+  // notifyEnabled flag directly and is NEVER cleared here, so losing a device
+  // subscription can no longer silently disable reminders for the account
+  // (the old bug). The Push toggle reflects only whether THIS device is
+  // subscribed, after a self-heal attempt.
+  function syncNotificationUI() {
+    var supported = pushSupported();
+    var loggedIn = !!currentUserId;
+
+    // Intent mirror - independent of subscription state.
+    els.sNotifyLateOut.checked = !!state.settings.notifyEnabled;
+    els.sNotifyLateOut.disabled = !supported || !loggedIn;
+
+    if (!supported || !loggedIn) {
+      els.sPushEnabled.checked = false;
+      els.sPushEnabled.disabled = true;
+      els.pushRow.classList.add("is-disabled");
+      els.pushHint.textContent = !supported
+        ? "อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)"
+        : "ต้องเข้าสู่ระบบก่อนจึงจะเปิดใช้ได้ — เมื่อเปิด เบราว์เซอร์จะลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
       return;
     }
-    navigator.serviceWorker.ready.then(function (reg) {
-      return reg.pushManager.getSubscription();
-    }).then(function (sub) {
-      updatePushToggleAvailability(!!sub);
-    }).catch(function () {
-      updatePushToggleAvailability(false);
+
+    els.sPushEnabled.disabled = false;
+    els.pushRow.classList.remove("is-disabled");
+
+    ensurePushSubscription().then(function (subscribed) {
+      els.sPushEnabled.checked = subscribed;
+      var perm = notificationPermission();
+      if (state.settings.notifyEnabled && !subscribed) {
+        els.pushHint.textContent = perm === "denied"
+          ? "⚠️ แจ้งเตือนจดบันทึก OT เปิดอยู่ แต่อุปกรณ์นี้บล็อกการแจ้งเตือน — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ แล้วกลับมาเปิดสวิตช์ Push ด้านบนอีกครั้ง"
+          : "⚠️ แจ้งเตือนจดบันทึก OT เปิดอยู่ แต่อุปกรณ์นี้ยังไม่ได้รับ push — แตะสวิตช์ Push ด้านบนเพื่อเปิดรับบนอุปกรณ์นี้";
+      } else if (subscribed) {
+        els.pushHint.textContent = "เปิดใช้แล้วสำหรับอุปกรณ์นี้ จะได้รับการแจ้งเตือนแม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+      } else if (perm === "denied") {
+        els.pushHint.textContent = "อุปกรณ์นี้บล็อกการแจ้งเตือนอยู่ — เปิดสิทธิ์แจ้งเตือนของเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน";
+      } else {
+        els.pushHint.textContent = "เมื่อเปิด เบราว์เซอร์จะขอสิทธิ์การแจ้งเตือนและลงทะเบียนรับ push ให้อุปกรณ์นี้ ทำงานได้แม้ปิดแอปหรือแท็บนี้ไปแล้ว";
+      }
+    });
+  }
+
+  // Called after the user explicitly turns the leave-work reminder ON. The
+  // intent itself is already saved by the caller; this only makes sure the
+  // current device can actually receive it, prompting for permission inside
+  // the user gesture when needed. It never rolls the intent back on failure -
+  // the setting stays on and simply gets delivered once the device is ready
+  // (e.g. after the user grants permission and reloads).
+  function ensureDeviceReadyForReminders() {
+    if (!pushSupported()) {
+      showToast("บันทึกการตั้งค่าแล้ว แต่อุปกรณ์นี้ไม่รองรับ push (iPhone ต้อง Add to Home Screen ก่อน)");
+      syncNotificationUI();
+      return;
+    }
+    var perm = notificationPermission();
+    if (perm === "granted") {
+      ensurePushSubscription().then(function (sub) {
+        showToast(sub ? "เปิดแจ้งเตือนจดบันทึก OT แล้ว ✓" : "บันทึกแล้ว แต่ยังลงทะเบียน push บนอุปกรณ์นี้ไม่สำเร็จ");
+        syncNotificationUI();
+      });
+      return;
+    }
+    if (perm === "denied") {
+      showToast("บันทึกแล้ว — แต่อุปกรณ์นี้บล็อกการแจ้งเตือน เปิดสิทธิ์ในตั้งค่าเบราว์เซอร์เพื่อรับบนเครื่องนี้");
+      syncNotificationUI();
+      return;
+    }
+    Notification.requestPermission().then(function (p) {
+      if (p === "granted") {
+        subscribeToPush()
+          .then(function () { showToast("เปิดแจ้งเตือนจดบันทึก OT แล้ว ✓"); })
+          .catch(function (err) { console.error("สมัครรับ Push ไม่สำเร็จ", err); })
+          .finally(syncNotificationUI);
+      } else {
+        showToast("บันทึกแล้ว — แต่ยังไม่ได้อนุญาตแจ้งเตือน จะได้รับเมื่ออนุญาตสิทธิ์ในเบราว์เซอร์");
+        syncNotificationUI();
+      }
     });
   }
 
@@ -2687,62 +3290,72 @@
     });
   }
 
+  // This toggle governs only THIS device's push subscription (shared by both
+  // the leave-work reminder and the upcoming-event reminder). It does not
+  // touch the account-level notifyEnabled intent.
   els.sPushEnabled.addEventListener("change", function () {
-    console.log("[push debug] toggle change fired, checked =", els.sPushEnabled.checked);
     if (!els.sPushEnabled.checked) {
       unsubscribeFromPush().then(function () {
-        showToast("ปิดการแจ้งเตือนแบบ Push แล้ว");
+        showToast("ปิดการแจ้งเตือนแบบ Push บนอุปกรณ์นี้แล้ว");
       }).catch(function (err) {
         console.error("ยกเลิกการสมัครรับ Push ไม่สำเร็จ", err);
-      }).finally(refreshPushToggleState);
+      }).finally(syncNotificationUI);
       return;
     }
 
     if (!pushSupported()) {
-      console.log("[push debug] pushSupported() = false, aborting");
-      els.sPushEnabled.checked = false;
       showToast("อุปกรณ์นี้ไม่รองรับ หรือถ้าใช้ iPhone ต้องกด Add to Home Screen ก่อน (Safari → แชร์ → เพิ่มไปยังหน้าจอโฮม)");
+      syncNotificationUI();
       return;
     }
     if (!currentUserId) {
-      console.log("[push debug] currentUserId is falsy, aborting");
-      els.sPushEnabled.checked = false;
       showToast("กรุณาเข้าสู่ระบบก่อนเปิดการแจ้งเตือนแบบ Push");
+      syncNotificationUI();
       return;
     }
 
-    console.log("[push debug] requesting Notification permission");
     Notification.requestPermission().then(function (permission) {
-      console.log("[push debug] Notification.requestPermission resolved:", permission);
       if (permission !== "granted") {
         showToast("การแจ้งเตือนถูกปฏิเสธ กรุณาเปิดสิทธิ์การแจ้งเตือนสำหรับเว็บนี้ในตั้งค่าเบราว์เซอร์ก่อน");
-        refreshPushToggleState();
+        syncNotificationUI();
         return;
       }
-      subscribeToPush().then(function () {
-        console.log("[push debug] subscribeToPush chain completed successfully");
-        showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓");
-        refreshPushToggleState();
-      }).catch(function (err) {
-        console.error("สมัครรับ Push ไม่สำเร็จ", err);
-        showToast("เปิดการแจ้งเตือนแบบ Push ไม่สำเร็จ");
-        refreshPushToggleState();
-      });
+      subscribeToPush()
+        .then(function () { showToast("เปิดการแจ้งเตือนแบบ Push แล้ว ✓"); })
+        .catch(function (err) {
+          console.error("สมัครรับ Push ไม่สำเร็จ", err);
+          showToast("เปิดการแจ้งเตือนแบบ Push ไม่สำเร็จ");
+        })
+        .finally(syncNotificationUI);
     });
   });
 
-  // Piggybacks on the Push toggle above rather than requesting its own
-  // permission - the reminder is delivered server-side (see notifyEnabled's
-  // definition near the top of state.settings) and is meaningless without
-  // an active Push subscription, so refuse to turn on if Push isn't already
-  // enabled instead of prompting for anything here.
+  // The leave-work reminder toggle is pure account-level intent: flipping it
+  // saves immediately and unconditionally (that is what makes it persist
+  // across days and survive this device losing its subscription). Turning it
+  // on then makes a best-effort attempt to get this device ready to receive
+  // it; the setting is never rolled back if that attempt can't complete.
   els.sNotifyLateOut.addEventListener("change", function () {
-    if (els.sNotifyLateOut.checked && !els.sPushEnabled.checked) {
-      els.sNotifyLateOut.checked = false;
-      showToast("ต้องเปิดการแจ้งเตือนแบบ Push ด้านบนก่อน");
-      return;
+    var wantOn = els.sNotifyLateOut.checked;
+    state.settings.notifyEnabled = wantOn;
+    updateNotifyTimeVisible();
+    persistSettings();
+    if (wantOn) {
+      ensureDeviceReadyForReminders();
+    } else {
+      showToast("ปิดแจ้งเตือนจดบันทึก OT แล้ว");
+      syncNotificationUI();
     }
-    state.settings.notifyEnabled = els.sNotifyLateOut.checked;
+  });
+
+  // The reminder time only matters while the reminder is on, so hide the row
+  // when it's off to keep the settings card uncluttered.
+  function updateNotifyTimeVisible() {
+    els.notifyTimeRow.classList.toggle("hidden", !state.settings.notifyEnabled);
+  }
+
+  els.sNotifyTime.addEventListener("input", function () {
+    state.settings.notifyTime = els.sNotifyTime.value || "";
     persistSettings();
   });
 
@@ -2758,5 +3371,5 @@
   loadSettingsToForm();
   renderSummary();
   checkUpcomingNoteNotifications();
-  refreshPushToggleState();
+  syncNotificationUI();
 })();
