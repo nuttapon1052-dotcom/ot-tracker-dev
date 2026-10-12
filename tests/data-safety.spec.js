@@ -1,5 +1,8 @@
 const { test, expect } = require("@playwright/test");
 
+const { makeCloud, prepareContext } = require("./support/fake-supabase");
+test.beforeEach(async ({context,page}) => { await prepareContext(context,makeCloud(),page); });
+
 const KEY = "ot-tracker-data-v1";
 
 function seedWith(entries) {
